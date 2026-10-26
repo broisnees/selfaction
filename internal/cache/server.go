@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/docker/go-units"
 	"github.com/sirupsen/logrus"
 )
 
@@ -36,6 +38,22 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST "+base+"/clean", s.auth(func(w http.ResponseWriter, r *http.Request, _ string) { reply(w, 200, struct{}{}) }))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { reply(w, 200, map[string]string{"status": "ok"}) })
 	return mux
+}
+
+// RunGC applies p now and then every interval until ctx ends.
+func (s *Server) RunGC(ctx context.Context, p Policy, interval time.Duration) {
+	for {
+		if n, freed, err := s.Store.GC(ctx, p); err != nil {
+			s.Log.Warnf("cache gc: %v", err)
+		} else if n > 0 {
+			s.Log.Infof("cache gc: removed %d entries, freed %s", n, units.HumanSize(float64(freed)))
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(interval):
+		}
+	}
 }
 
 type scopedHandler func(w http.ResponseWriter, r *http.Request, scope string)

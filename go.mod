@@ -3,6 +3,7 @@ module github.com/broisnischal/selfaction
 go 1.26.0
 
 require (
+	github.com/docker/go-units v0.5.0
 	github.com/sirupsen/logrus v1.9.3
 	modernc.org/sqlite v1.61.0
 )
