@@ -25,6 +25,9 @@ var (
 	ErrNotFound = errors.New("cache entry not found")
 )
 
+// staleReservation is how long an unfinished upload may sit idle before GC drops it.
+const staleReservation = 30 * time.Minute
+
 // Entry is one saved cache archive. Scope isolates caches per repository.
 type Entry struct {
 	ID        int64
@@ -298,4 +301,99 @@ func ids(entries []Entry) []int64 {
 		out[i] = e.ID
 	}
 	return out
+}
+
+// Policy bounds the cache. Zero values disable a limit.
+type Policy struct {
+	TTL           time.Duration // drop entries unused for this long (GitHub: 7 days)
+	MaxScopeBytes int64         // per-repo cap, least recently used evicted first (GitHub: 10 GB)
+	MaxTotalBytes int64         // whole-store cap
+}
+
+// GC applies p, drops abandoned uploads and orphaned archive files, and
+// returns the number of entries and bytes freed.
+func (s *Store) GC(ctx context.Context, p Policy) (int, int64, error) {
+	now := time.Now()
+	var victims []int64
+	var freed int64
+	q := `SELECT ` + cols + ` FROM caches WHERE (complete = 0 AND used_at < ?)`
+	args := []any{now.Add(-staleReservation).Unix()}
+	if p.TTL > 0 {
+		q += ` OR used_at < ?`
+		args = append(args, now.Add(-p.TTL).Unix())
+	}
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return 0, 0, err
+	}
+	expired, err := scanEntries(rows)
+	if err != nil {
+		return 0, 0, err
+	}
+	gone := make(map[int64]bool, len(expired))
+	for _, e := range expired {
+		victims = append(victims, e.ID)
+		freed += e.Size
+		gone[e.ID] = true
+	}
+
+	if p.MaxScopeBytes > 0 || p.MaxTotalBytes > 0 {
+		rows, err := s.db.QueryContext(ctx, `SELECT `+cols+` FROM caches WHERE complete = 1 ORDER BY used_at DESC`)
+		if err != nil {
+			return 0, 0, err
+		}
+		live, err := scanEntries(rows)
+		if err != nil {
+			return 0, 0, err
+		}
+		perScope := map[string]int64{}
+		var total int64
+		for _, e := range live {
+			if gone[e.ID] {
+				continue
+			}
+			perScope[e.Scope] += e.Size
+			total += e.Size
+			if (p.MaxScopeBytes > 0 && perScope[e.Scope] > p.MaxScopeBytes) || (p.MaxTotalBytes > 0 && total > p.MaxTotalBytes) {
+				perScope[e.Scope] -= e.Size
+				total -= e.Size
+				victims = append(victims, e.ID)
+				freed += e.Size
+			}
+		}
+	}
+	if err := s.Delete(ctx, victims...); err != nil {
+		return 0, 0, err
+	}
+	return len(victims), freed, s.removeOrphans(ctx)
+}
+
+// removeOrphans deletes archive files whose index row is gone (crash between steps).
+func (s *Store) removeOrphans(ctx context.Context) error {
+	files, err := os.ReadDir(filepath.Join(s.dir, "blobs"))
+	if err != nil {
+		return err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM caches`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	known := map[string]bool{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		known[strconv.FormatInt(id, 10)] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, f := range files {
+		if !known[f.Name()] {
+			_ = os.Remove(filepath.Join(s.dir, "blobs", f.Name()))
+		}
+	}
+	return nil
 }
