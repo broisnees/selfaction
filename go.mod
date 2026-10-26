@@ -7,6 +7,7 @@ require (
 	github.com/nektos/act v0.2.89
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/cobra v1.10.2
+	github.com/spf13/pflag v1.0.10
 	modernc.org/sqlite v1.61.0
 )
 
@@ -73,7 +74,6 @@ require (
 	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/sergi/go-diff v1.3.2-0.20230802210424-5b0b94c5c0d3 // indirect
 	github.com/skeema/knownhosts v1.3.1 // indirect
-	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
 	github.com/xeipuuv/gojsonpointer v0.0.0-20190905194746-02993c407bfb // indirect
 	github.com/xeipuuv/gojsonreference v0.0.0-20180127040603-bd5ef7bd5415 // indirect
