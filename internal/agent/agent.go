@@ -338,6 +338,25 @@ func cleanSlot(dir string, tools bool) {
 	}
 }
 
+// Clean frees disk used by the agent in dir. Run it while the agent is stopped;
+// a running agent already cleans each slot after every job.
+func Clean(dir string, tools, runners bool) error {
+	if runners {
+		return errors.Join(os.RemoveAll(filepath.Join(dir, "runners")), os.RemoveAll(filepath.Join(dir, "downloads")))
+	}
+	slots, err := filepath.Glob(filepath.Join(dir, "runners", "*", "slot-*"))
+	for _, s := range slots {
+		cleanSlot(s, tools)
+	}
+	return err
+}
+
+// PruneDocker removes stopped containers, unused networks, dangling images and
+// build cache older than age on the whole Docker host.
+func PruneDocker(ctx context.Context, age time.Duration) ([]byte, error) {
+	return exec.CommandContext(ctx, "docker", "system", "prune", "--force", "--filter", "until="+age.String()).CombinedOutput()
+}
+
 func randHex(n int) string {
 	b := make([]byte, n)
 	_, _ = rand.Read(b)
