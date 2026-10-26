@@ -1,5 +1,100 @@
 @layer base, starlight, theme, components, utilities;
 
+@import '@fontsource-variable/schibsted-grotesk';
+@import '@fontsource-variable/martian-mono/standard.css';
 @import '@astrojs/starlight-tailwind';
 @import 'tailwindcss/theme.css' layer(theme);
 @import 'tailwindcss/utilities.css' layer(utilities);
+
+/*
+ * Palette: cool fog paper, navy ink, and the amber of a job in progress.
+ * Green and red are reserved for pass and fail.
+ * Starlight sets data-theme on <html>; dark is its default.
+ */
+:root {
+	--sa-paper: #0d1628;
+	--sa-panel: #131f36;
+	--sa-ink: #e6ebf2;
+	--sa-ink-soft: #9fb0c8;
+	--sa-rule: #26344f;
+	--sa-signal: #f5b331;
+	--sa-pass: #46c486;
+	--sa-fail: #f07261;
+}
+:root[data-theme='light'] {
+	--sa-paper: #eef1f4;
+	--sa-panel: #ffffff;
+	--sa-ink: #0e1a33;
+	--sa-ink-soft: #3b4a63;
+	--sa-rule: #cbd3dd;
+	--sa-signal: #f0a202;
+	--sa-pass: #1a7f4b;
+	--sa-fail: #c23b2e;
+}
+
+@theme {
+	--font-sans: 'Schibsted Grotesk Variable', ui-sans-serif, system-ui, sans-serif;
+	--font-mono: 'Martian Mono Variable', ui-monospace, monospace;
+
+	--color-accent-50: var(--color-amber-50);
+	--color-accent-100: var(--color-amber-100);
+	--color-accent-200: var(--color-amber-200);
+	--color-accent-300: var(--color-amber-300);
+	--color-accent-400: var(--color-amber-400);
+	--color-accent-500: var(--color-amber-500);
+	--color-accent-600: var(--color-amber-600);
+	--color-accent-700: var(--color-amber-700);
+	--color-accent-800: var(--color-amber-800);
+	--color-accent-900: var(--color-amber-900);
+	--color-accent-950: var(--color-amber-950);
+
+	--color-gray-50: var(--color-slate-50);
+	--color-gray-100: var(--color-slate-100);
+	--color-gray-200: var(--color-slate-200);
+	--color-gray-300: var(--color-slate-300);
+	--color-gray-400: var(--color-slate-400);
+	--color-gray-500: var(--color-slate-500);
+	--color-gray-600: var(--color-slate-600);
+	--color-gray-700: var(--color-slate-700);
+	--color-gray-800: var(--color-slate-800);
+	--color-gray-900: var(--color-slate-900);
+	--color-gray-950: var(--color-slate-950);
+}
+
+/* Theme-aware brand colors as utilities: bg-paper, text-ink, border-rule, text-signal… */
+@theme inline {
+	--color-paper: var(--sa-paper);
+	--color-panel: var(--sa-panel);
+	--color-ink: var(--sa-ink);
+	--color-ink-soft: var(--sa-ink-soft);
+	--color-rule: var(--sa-rule);
+	--color-signal: var(--sa-signal);
+	--color-pass: var(--sa-pass);
+	--color-fail: var(--sa-fail);
+}
+
+@layer components {
+	/* A slightly condensed cut of Martian Mono keeps log lines and code readable at width. */
+	code,
+	pre,
+	kbd,
+	.font-mono {
+		font-stretch: 87.5%;
+	}
+
+	/* Links read as ink with an amber underline rather than as colored text. */
+	.sl-markdown-content a:not(:where(.not-content *)) {
+		color: var(--sa-ink);
+		text-decoration-color: var(--sa-signal);
+		text-decoration-thickness: 0.12em;
+		text-underline-offset: 0.22em;
+	}
+	.sl-markdown-content a:not(:where(.not-content *)):hover {
+		text-decoration-thickness: 0.2em;
+	}
+
+	:focus-visible {
+		outline: 2px solid var(--sa-signal);
+		outline-offset: 2px;
+	}
+}
