@@ -1,0 +1,20 @@
+# Exercises actions/cache against selfaction's cache server.
+# First run: cache miss, "installs" deps, saves. Second run: cache hit.
+name: cache-demo
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        id: cache
+        with:
+          path: deps
+          key: deps-${{ runner.os }}-${{ hashFiles('deps.txt') }}
+          restore-keys: deps-${{ runner.os }}-
+      - name: Install dependencies (cache miss only)
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: mkdir -p deps && date -u > deps/installed-at.txt
+      - name: Report
+        run: echo "cache-hit=${{ steps.cache.outputs.cache-hit }} installed-at=$(cat deps/installed-at.txt)"
