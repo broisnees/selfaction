@@ -1,0 +1,26 @@
+---
+// Replaces Starlight's SocialIcons slot so the header carries the site sections too.
+import Default from '@astrojs/starlight/components/SocialIcons.astro';
+
+const links = [
+	{ href: '/docs/', label: 'Docs' },
+	{ href: '/blog/', label: 'Blog' },
+	{ href: '/demo/', label: 'Demo' },
+];
+const path = Astro.url.pathname;
+---
+
+<nav aria-label="Site" class="hidden items-center gap-5 md:flex">
+	{
+		links.map(({ href, label }) => (
+			<a
+				href={href}
+				aria-current={path.startsWith(href) ? 'page' : undefined}
+				class="text-sm font-medium text-ink-soft no-underline decoration-signal decoration-2 underline-offset-[0.4em] hover:text-ink aria-[current=page]:text-ink aria-[current=page]:underline"
+			>
+				{label}
+			</a>
+		))
+	}
+</nav>
+<Default />
