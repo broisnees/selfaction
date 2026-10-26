@@ -33,10 +33,12 @@ type Config struct {
 	Name          string   // runner name prefix
 	Labels        []string // extra labels on top of self-hosted, OS and arch
 	Slots         int      // concurrent jobs
-	Mode          string   // "host" runs jobs on this machine
+	Mode          string   // "host" runs jobs on this machine, "docker" in a fresh container per job
 	GroupID       int64    // runner group (1 = Default)
 	Dir           string   // working directory for runner installs and workspaces
 	RunnerVersion string   // actions/runner version for host mode; "" = latest
+	Image         string   // runner image for docker mode
+	DockerSocket  bool     // docker mode: give jobs the host Docker daemon (container jobs, services, docker build)
 }
 
 type Agent struct {
@@ -60,8 +62,14 @@ func (a *Agent) Run(ctx context.Context) error {
 		if err := a.prepareHost(ctx); err != nil {
 			return err
 		}
+	case "docker":
+		a.Log.Infof("pulling %s", a.Image)
+		pull := exec.CommandContext(ctx, "docker", "pull", "--quiet", a.Image)
+		if out, err := pull.CombinedOutput(); err != nil {
+			return fmt.Errorf("docker pull %s: %v: %s", a.Image, err, out)
+		}
 	default:
-		return fmt.Errorf("unknown mode %q (want host)", a.Mode)
+		return fmt.Errorf("unknown mode %q (want host or docker)", a.Mode)
 	}
 	a.Log.Infof("serving %s with %d slot(s), labels %s", a.Target, a.Slots, strings.Join(a.labels, ","))
 
@@ -109,10 +117,19 @@ func (a *Agent) runJob(ctx context.Context, n int) error {
 		}
 	}()
 
-	dir := a.slotDir(n)
-	defer cleanSlot(dir, false)
-	cmd := exec.CommandContext(ctx, filepath.Join(dir, "run.sh"))
-	cmd.Dir = dir
+	var cmd *exec.Cmd
+	if a.Mode == "docker" {
+		args := []string{"run", "--rm", "--name", name, "--label", "dev.selfaction.agent=1", "-e", "ACTIONS_RUNNER_INPUT_JITCONFIG"}
+		if a.DockerSocket {
+			args = append(args, "-v", "/var/run/docker.sock:/var/run/docker.sock")
+		}
+		cmd = exec.CommandContext(ctx, "docker", append(args, a.Image, "/home/runner/run.sh")...)
+	} else {
+		dir := a.slotDir(n)
+		defer cleanSlot(dir, false)
+		cmd = exec.CommandContext(ctx, filepath.Join(dir, "run.sh"))
+		cmd.Dir = dir
+	}
 	// The runner reads ACTIONS_RUNNER_INPUT_* and scrubs it from its environment,
 	// which keeps the credential out of `ps` output, unlike --jitconfig.
 	cmd.Env = append(os.Environ(), "ACTIONS_RUNNER_INPUT_JITCONFIG="+jit.Config)
@@ -131,6 +148,9 @@ func (a *Agent) runJob(ctx context.Context, n int) error {
 
 func (a *Agent) defaultLabels() []string {
 	goos := runtime.GOOS
+	if a.Mode == "docker" {
+		goos = "linux"
+	}
 	base := []string{
 		"self-hosted",
 		map[string]string{"darwin": "macOS", "linux": "Linux", "windows": "Windows"}[goos],
@@ -152,8 +172,8 @@ func runnerPlatform() (string, error) {
 	osName, ok := map[string]string{"darwin": "osx", "linux": "linux"}[runtime.GOOS]
 	arch, ok2 := map[string]string{"amd64": "x64", "arm64": "arm64", "arm": "arm"}[runtime.GOARCH]
 	if !ok || !ok2 {
-		// phobos: Windows host mode needs .zip extraction and run.cmd; add when Windows hosts matter.
-		return "", fmt.Errorf("host mode is not supported on %s/%s", runtime.GOOS, runtime.GOARCH)
+		// phobos: Windows host mode needs .zip extraction and run.cmd; use --mode docker there until added.
+		return "", fmt.Errorf("host mode is not supported on %s/%s; use --mode docker", runtime.GOOS, runtime.GOARCH)
 	}
 	return osName + "-" + arch, nil
 }
