@@ -232,3 +232,70 @@ func (s *Store) OpenBlob(ctx context.Context, scope string, id int64) (*os.File,
 	s.touch(ctx, id)
 	return f, e, nil
 }
+
+// Filter selects entries for List and Prune. Zero values match everything.
+type Filter struct {
+	Scope     string
+	KeyPrefix string
+	UnusedFor time.Duration // only entries not used within this long
+}
+
+func (s *Store) List(ctx context.Context, f Filter) ([]Entry, error) {
+	q := `SELECT ` + cols + ` FROM caches WHERE 1 = 1`
+	var args []any
+	if f.Scope != "" {
+		q += ` AND scope = ?`
+		args = append(args, f.Scope)
+	}
+	if f.KeyPrefix != "" {
+		q += ` AND substr(key, 1, length(?)) = ?`
+		args = append(args, f.KeyPrefix, f.KeyPrefix)
+	}
+	if f.UnusedFor > 0 {
+		q += ` AND used_at < ?`
+		args = append(args, time.Now().Add(-f.UnusedFor).Unix())
+	}
+	rows, err := s.db.QueryContext(ctx, q+` ORDER BY scope, used_at DESC`, args...)
+	if err != nil {
+		return nil, err
+	}
+	return scanEntries(rows)
+}
+
+// Delete removes entries and their archives. Downloads already in progress finish
+// from the open file handle.
+func (s *Store) Delete(ctx context.Context, ids ...int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM caches WHERE id IN (?`+strings.Repeat(`, ?`, len(ids)-1)+`)`, args...); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if err := os.Remove(s.blob(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
+}
+
+// Prune deletes every entry matching f and returns what it removed.
+func (s *Store) Prune(ctx context.Context, f Filter) ([]Entry, error) {
+	entries, err := s.List(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+	return entries, s.Delete(ctx, ids(entries)...)
+}
+
+func ids(entries []Entry) []int64 {
+	out := make([]int64, len(entries))
+	for i, e := range entries {
+		out[i] = e.ID
+	}
+	return out
+}
