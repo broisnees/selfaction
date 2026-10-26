@@ -1,0 +1,30 @@
+# Runs on a selfaction agent, not on GitHub's machines:
+#   selfaction agent start --repo <owner>/<repo> --labels selfaction-local
+# Dispatch with runner=selfaction-docker to target a --mode docker agent.
+name: local-runner
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: runner label to target
+        default: selfaction-local
+jobs:
+  test:
+    runs-on: [self-hosted, "${{ inputs.runner || 'selfaction-local' }}"]
+    steps:
+      - name: Where am I running?
+        run: |
+          echo "runner:  $RUNNER_NAME"
+          echo "host:    $(hostname)"
+          echo "os/arch: $RUNNER_OS/$RUNNER_ARCH"
+          echo "user:    $(whoami)"
+          echo "workdir: $GITHUB_WORKSPACE"
+          uname -a
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+      - run: go build -o bin/selfaction . && ./bin/selfaction --version
