@@ -34,7 +34,7 @@ func cacheCmd() *cobra.Command {
 		}
 		return cache.Open(dir)
 	}
-	cmd.AddCommand(cacheServeCmd(open, &dir), cacheListCmd(open), cacheRmCmd(open))
+	cmd.AddCommand(cacheServeCmd(open, &dir), cacheListCmd(open), cacheRmCmd(open), cachePruneCmd(open), cacheGCCmd(open))
 	return cmd
 }
 
@@ -149,6 +149,75 @@ func cacheRmCmd(open func() (*cache.Store, error)) *cobra.Command {
 			return store.Delete(cmd.Context(), ids...)
 		},
 	}
+}
+
+func cachePruneCmd(open func() (*cache.Store, error)) *cobra.Command {
+	var all, dryRun bool
+	cmd := &cobra.Command{
+		Use:   "prune",
+		Short: "Delete cache entries matching filters",
+		Example: `  selfaction cache prune --repo octo/app --key node-modules-
+  selfaction cache prune --unused-for 72h
+  selfaction cache prune --all --dry-run`,
+	}
+	filter := filterFlags(cmd)
+	cmd.Flags().BoolVar(&all, "all", false, "allow pruning with no filter (deletes everything)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "show what would be deleted")
+	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
+		f := filter()
+		if f == (cache.Filter{}) && !all {
+			return errors.New("no filter given; pass --all to delete every cache entry")
+		}
+		store, err := open()
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+		var entries []cache.Entry
+		if dryRun {
+			entries, err = store.List(cmd.Context(), f)
+		} else {
+			entries, err = store.Prune(cmd.Context(), f)
+		}
+		if err != nil {
+			return err
+		}
+		printEntries(entries)
+		var total int64
+		for _, e := range entries {
+			total += e.Size
+		}
+		verb := "deleted"
+		if dryRun {
+			verb = "would delete"
+		}
+		fmt.Printf("%s %d entries, %s\n", verb, len(entries), units.HumanSize(float64(total)))
+		return nil
+	}
+	return cmd
+}
+
+func cacheGCCmd(open func() (*cache.Store, error)) *cobra.Command {
+	cmd := &cobra.Command{Use: "gc", Short: "Apply the retention policy now (the server also does this periodically)"}
+	policy := policyFlags(cmd)
+	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
+		p, err := policy()
+		if err != nil {
+			return err
+		}
+		store, err := open()
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+		n, freed, err := store.GC(cmd.Context(), p)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("removed %d entries, freed %s\n", n, units.HumanSize(float64(freed)))
+		return nil
+	}
+	return cmd
 }
 
 func printEntries(entries []cache.Entry) {
