@@ -4,13 +4,17 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"text/tabwriter"
 	"time"
 
+	"github.com/docker/go-units"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
@@ -30,7 +34,7 @@ func cacheCmd() *cobra.Command {
 		}
 		return cache.Open(dir)
 	}
-	cmd.AddCommand(cacheServeCmd(open, &dir))
+	cmd.AddCommand(cacheServeCmd(open, &dir), cacheListCmd(open), cacheRmCmd(open))
 	return cmd
 }
 
@@ -89,4 +93,74 @@ func loadOrCreateToken(path string) (string, error) {
 	_, _ = rand.Read(b)
 	token := hex.EncodeToString(b)
 	return token, os.WriteFile(path, []byte(token+"\n"), 0o600)
+}
+
+func filterFlags(cmd *cobra.Command) func() cache.Filter {
+	repo := cmd.Flags().String("repo", "", "only this repository (owner/repo)")
+	key := cmd.Flags().String("key", "", "only keys starting with this prefix")
+	unused := cmd.Flags().Duration("unused-for", 0, "only caches not used for this long, e.g. 72h")
+	return func() cache.Filter {
+		f := cache.Filter{KeyPrefix: *key, UnusedFor: *unused}
+		if *repo != "" {
+			f.Scope = cache.ScopeOf(*repo)
+		}
+		return f
+	}
+}
+
+func cacheListCmd(open func() (*cache.Store, error)) *cobra.Command {
+	cmd := &cobra.Command{Use: "ls", Short: "List cache entries"}
+	filter := filterFlags(cmd)
+	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
+		store, err := open()
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+		entries, err := store.List(cmd.Context(), filter())
+		if err != nil {
+			return err
+		}
+		printEntries(entries)
+		return nil
+	}
+	return cmd
+}
+
+func cacheRmCmd(open func() (*cache.Store, error)) *cobra.Command {
+	return &cobra.Command{
+		Use:   "rm <id>...",
+		Short: "Delete cache entries by id",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ids := make([]int64, len(args))
+			for i, a := range args {
+				id, err := strconv.ParseInt(a, 10, 64)
+				if err != nil {
+					return fmt.Errorf("invalid id %q", a)
+				}
+				ids[i] = id
+			}
+			store, err := open()
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+			return store.Delete(cmd.Context(), ids...)
+		},
+	}
+}
+
+func printEntries(entries []cache.Entry) {
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tREPO\tKEY\tSIZE\tCREATED\tLAST USED")
+	for _, e := range entries {
+		key := e.Key
+		if !e.Complete {
+			key += " (uploading)"
+		}
+		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s ago\t%s ago\n", e.ID, e.Scope, key, units.HumanSize(float64(e.Size)),
+			units.HumanDuration(time.Since(e.CreatedAt)), units.HumanDuration(time.Since(e.UsedAt)))
+	}
+	w.Flush()
 }
