@@ -13,9 +13,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
+	"github.com/nektos/act/pkg/artifacts"
 	"github.com/nektos/act/pkg/common"
 	"github.com/nektos/act/pkg/common/git"
 	"github.com/nektos/act/pkg/container"
@@ -45,6 +47,7 @@ type Options struct {
 	CacheDir    string // local cache store, used when CacheURL is empty
 	CacheURL    string // shared cache server base: http://host:port/<token>
 	NoCache     bool
+	ArtifactDir string
 	CachePolicy cache.Policy
 }
 
@@ -124,7 +127,7 @@ func Run(ctx context.Context, o Options) error {
 	// Job containers reach the host through its LAN address, as act does.
 	ip := common.GetOutboundIP()
 	if ip == nil {
-		return errors.New("cannot determine this machine's outbound IP for the cache server")
+		return errors.New("cannot determine this machine's outbound IP for the cache and artifact servers")
 	}
 
 	if !o.NoCache {
@@ -140,6 +143,17 @@ func Run(ctx context.Context, o Options) error {
 		}
 		env["ACTIONS_CACHE_URL"] = strings.TrimSuffix(base, "/") + "/" + scope + "/"
 		log.Infof("cache: scope %s", scope)
+	}
+
+	artifactPort := ""
+	if o.ArtifactDir != "" {
+		port, err := freePort(ip)
+		if err != nil {
+			return err
+		}
+		artifactPort = strconv.Itoa(port)
+		stop := artifacts.Serve(ctx, o.ArtifactDir, ip.String(), artifactPort)
+		defer stop()
 	}
 
 	r, err := runner.New(&runner.Config{
@@ -160,6 +174,9 @@ func Run(ctx context.Context, o Options) error {
 		RemoteName:            "origin",
 		UseGitIgnore:          true,
 		AutoRemove:            true,
+		ArtifactServerPath:    o.ArtifactDir,
+		ArtifactServerAddr:    ip.String(),
+		ArtifactServerPort:    artifactPort,
 		ConcurrentJobs:        o.Concurrency,
 	})
 	if err != nil {
@@ -192,6 +209,15 @@ func startCache(ctx context.Context, dir string, ip net.IP, p cache.Policy) (fun
 		_ = store.Close()
 	}
 	return stop, fmt.Sprintf("http://%s/%s", ln.Addr(), token), nil
+}
+
+func freePort(ip net.IP) (int, error) {
+	ln, err := net.Listen("tcp", net.JoinHostPort(ip.String(), "0"))
+	if err != nil {
+		return 0, err
+	}
+	defer ln.Close()
+	return ln.Addr().(*net.TCPAddr).Port, nil
 }
 
 // repoName is owner/repo from the origin remote, or the directory name.
