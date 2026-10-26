@@ -1,0 +1,38 @@
+# Cache server only:       docker compose up -d
+# Cache server + runners:  GITHUB_TOKEN=... GITHUB_REPO=owner/repo docker compose --profile agent up -d
+services:
+  cache:
+    build: .
+    image: selfaction:local
+    command: ["cache", "serve", "--addr", ":7979"]
+    ports: ["7979:7979"]
+    environment:
+      SELFACTION_CACHE_TOKEN: ${SELFACTION_CACHE_TOKEN:-} # empty = generated, saved in the volume
+    volumes: ["cache-data:/data"]
+    restart: unless-stopped
+
+  agent:
+    image: selfaction:local
+    profiles: ["agent"]
+    depends_on: [cache]
+    # Every job runs in a fresh actions-runner container next to this one.
+    command:
+      - agent
+      - start
+      - --mode=docker
+      - --docker-socket
+      - --repo=${GITHUB_REPO:-}
+      - --slots=${SLOTS:-2}
+      - --labels=${LABELS:-selfaction}
+      - --name=${RUNNER_NAME:-selfaction-docker}
+    environment:
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - agent-data:/data
+    stop_grace_period: 60s # lets running jobs cancel and report back
+    restart: unless-stopped
+
+volumes:
+  cache-data:
+  agent-data:
