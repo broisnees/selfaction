@@ -382,7 +382,12 @@ func (l *lineLogger) Write(p []byte) (int, error) {
 		if i < 0 {
 			return len(p), nil
 		}
-		if line := strings.TrimSpace(string(l.buf[:i])); line != "" {
+		switch line := strings.TrimSpace(string(l.buf[:i])); {
+		case line == "":
+		case strings.HasPrefix(line, "[RUNNER ") || strings.HasPrefix(line, "[WORKER "):
+			// The runner image mirrors its diagnostic log to stdout; keep it for -v.
+			l.log.Debug(line)
+		default:
 			l.log.Info(line)
 		}
 		l.buf = l.buf[i+1:]

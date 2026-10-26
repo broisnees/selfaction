@@ -164,3 +164,16 @@ func TestExtract(t *testing.T) {
 		t.Error("archive entry escaping the destination was accepted")
 	}
 }
+
+func TestLineLoggerDemotesRunnerDiagnostics(t *testing.T) {
+	var buf bytes.Buffer
+	log := logrus.New()
+	log.Out = &buf
+	l := &lineLogger{log: log}
+	// Partial writes must be joined into lines.
+	_, _ = l.Write([]byte("[RUNNER 2026-10-26 16:29:24Z INFO Terminal] WRITE LINE: x\n√ Connec"))
+	_, _ = l.Write([]byte("ted to GitHub\n\n"))
+	if out := buf.String(); strings.Contains(out, "[RUNNER") || !strings.Contains(out, `msg="√ Connected to GitHub"`) {
+		t.Fatalf("got:\n%s", out)
+	}
+}
