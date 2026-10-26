@@ -30,7 +30,7 @@ then ` + "`gh auth token`" + `. Repository runners need admin access to the repo
 (classic PAT scope "repo", or fine-grained "Administration: write");
 organization runners need "admin:org" / "Self-hosted runners: write".`,
 	}
-	cmd.AddCommand(agentStartCmd())
+	cmd.AddCommand(agentStartCmd(), agentInstallCmd(), agentUninstallCmd())
 	return cmd
 }
 
@@ -140,4 +140,65 @@ func agentStartCmd() *cobra.Command {
 	}
 	a.bind(cmd.Flags())
 	return cmd
+}
+
+func agentInstallCmd() *cobra.Command {
+	var a agentFlags
+	cmd := &cobra.Command{
+		Use:     "install",
+		Short:   "Install the agent as a login service (launchd on macOS, systemd --user on Linux)",
+		Example: `  selfaction agent install --repo octo/app --labels my-mac --slots 2`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if _, err := a.target(); err != nil {
+				return err
+			}
+			token, fromGh, err := a.resolveToken(cmd.Context())
+			if err != nil {
+				return err
+			}
+			// Forward every flag the user set; persist an explicit token to a 0600 file
+			// instead of the service definition.
+			args := []string{"--home=" + homeDir} // the service won't see $SELFACTION_HOME
+			cmd.Flags().Visit(func(f *pflag.Flag) {
+				if f.Name == "token" || f.Name == "token-file" || f.Name == "home" {
+					return
+				}
+				v := f.Value.String()
+				if sv, ok := f.Value.(pflag.SliceValue); ok {
+					v = strings.Join(sv.GetSlice(), ",")
+				}
+				args = append(args, "--"+f.Name+"="+v)
+			})
+			if !fromGh {
+				tokenFile := a.tokenFile
+				if tokenFile == "" {
+					tokenFile = filepath.Join(homeDir, "agent", "token")
+					if err := os.MkdirAll(filepath.Dir(tokenFile), 0o700); err != nil {
+						return err
+					}
+					if err := os.WriteFile(tokenFile, []byte(token+"\n"), 0o600); err != nil {
+						return err
+					}
+				}
+				args = append(args, "--token-file="+tokenFile)
+			}
+			logFile := filepath.Join(homeDir, "agent.log")
+			path, err := agent.Install(args, logFile)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("installed %s\nlogs: %s\n", path, logFile)
+			return nil
+		},
+	}
+	a.bind(cmd.Flags())
+	return cmd
+}
+
+func agentUninstallCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "uninstall",
+		Short: "Stop and remove the agent service",
+		RunE:  func(*cobra.Command, []string) error { return agent.Uninstall() },
+	}
 }
