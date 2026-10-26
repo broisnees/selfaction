@@ -4,13 +4,19 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
+	"github.com/docker/go-units"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+
+	"github.com/broisnischal/selfaction/internal/cache"
 )
 
 var version = "dev"
@@ -36,6 +42,7 @@ func main() {
 	}
 	root.PersistentFlags().StringVar(&homeDir, "home", defaultHome(), "data directory (env SELFACTION_HOME)")
 	root.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "debug logging")
+	root.AddCommand(cacheCmd())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
@@ -51,4 +58,27 @@ func defaultHome() string {
 		return ".selfaction"
 	}
 	return filepath.Join(home, ".selfaction")
+}
+
+// signalContext ends on Ctrl-C or SIGTERM (what launchd, systemd and docker stop send).
+func signalContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+}
+
+// policyFlags binds the cache retention limits shared by `cache serve` and `cache gc`.
+func policyFlags(cmd *cobra.Command) func() (cache.Policy, error) {
+	ttl := cmd.Flags().Duration("ttl", 7*24*time.Hour, "evict caches unused for this long (0 = never)")
+	perRepo := cmd.Flags().String("max-repo-size", "10GB", "per-repository size cap, least recently used evicted first (0 = none)")
+	total := cmd.Flags().String("max-total-size", "0", "whole-store size cap (0 = none)")
+	return func() (cache.Policy, error) {
+		p := cache.Policy{TTL: *ttl}
+		var err error
+		if p.MaxScopeBytes, err = units.RAMInBytes(*perRepo); err != nil {
+			return p, fmt.Errorf("--max-repo-size: %w", err)
+		}
+		if p.MaxTotalBytes, err = units.RAMInBytes(*total); err != nil {
+			return p, fmt.Errorf("--max-total-size: %w", err)
+		}
+		return p, nil
+	}
 }
