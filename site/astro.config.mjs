@@ -1,6 +1,7 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import tailwindcss from '@tailwindcss/vite';
 
 const repo = 'https://github.com/broisnischal/selfaction';
 
@@ -10,6 +11,7 @@ export default defineConfig({
 			title: 'selfaction',
 			description: 'Run GitHub Actions on machines you own: your laptop, a server or Docker.',
 			social: [{ icon: 'github', label: 'GitHub', href: repo }],
+			customCss: ['./src/styles/global.css'],
 			editLink: { baseUrl: `${repo}/edit/main/site/` },
 			sidebar: [
 				{ label: 'Overview', link: '/docs/' },
@@ -19,4 +21,5 @@ export default defineConfig({
 			],
 		}),
 	],
+	vite: { plugins: [tailwindcss()] },
 });
