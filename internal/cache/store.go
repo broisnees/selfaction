@@ -115,6 +115,30 @@ func scanEntries(rows *sql.Rows) ([]Entry, error) {
 	return out, rows.Err()
 }
 
+// Find resolves keys the way GitHub does: for each key in order, an exact match
+// wins, otherwise the newest entry whose key starts with it.
+func (s *Store) Find(ctx context.Context, scope string, keys []string, version string) (*Entry, error) {
+	for _, k := range keys {
+		if k == "" {
+			continue
+		}
+		rows, err := s.db.QueryContext(ctx, `SELECT `+cols+` FROM caches
+			WHERE scope = ? AND version = ? AND complete = 1 AND substr(key, 1, length(?)) = ?
+			ORDER BY key = ? DESC, created_at DESC LIMIT 1`, scope, version, k, k, k)
+		if err != nil {
+			return nil, err
+		}
+		found, err := scanEntries(rows)
+		if err != nil {
+			return nil, err
+		}
+		if len(found) == 1 {
+			return &found[0], nil
+		}
+	}
+	return nil, nil
+}
+
 // Reserve starts a new upload. Entries are immutable: an existing or in-flight
 // entry for the same scope/key/version yields ErrExists.
 func (s *Store) Reserve(ctx context.Context, scope, key, version string) (int64, error) {
