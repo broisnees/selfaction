@@ -73,7 +73,7 @@ func TestRunJobHostMode(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	script := "#!/bin/sh\necho \"got=$ACTIONS_RUNNER_INPUT_JITCONFIG\"\nmkdir -p _work/octo/app _work/_tool/node _diag\ntouch .runner .credentials\n"
+	script := "#!/bin/sh\necho \"got=$ACTIONS_RUNNER_INPUT_JITCONFIG trap=$RUNNER_MANUALLY_TRAP_SIG\"\nmkdir -p _work/octo/app _work/_tool/node _diag\ntouch .runner .credentials\n"
 	if err := os.WriteFile(filepath.Join(dir, "run.sh"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestRunJobHostMode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !strings.Contains(logs.String(), "got=SECRET-JIT") {
+	if !strings.Contains(logs.String(), "got=SECRET-JIT trap=1") {
 		t.Errorf("runner did not receive the JIT config; logs:\n%s", logs.String())
 	}
 	for path, want := range map[string]bool{"_work/octo/app": false, "_diag": false, ".credentials": false, ".runner": false, "_work/_tool/node": true} {

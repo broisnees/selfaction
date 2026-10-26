@@ -119,7 +119,7 @@ func (a *Agent) runJob(ctx context.Context, n int) error {
 
 	var cmd *exec.Cmd
 	if a.Mode == "docker" {
-		args := []string{"run", "--rm", "--name", name, "--label", "dev.selfaction.agent=1", "-e", "ACTIONS_RUNNER_INPUT_JITCONFIG"}
+		args := []string{"run", "--rm", "--name", name, "--label", "dev.selfaction.agent=1", "-e", "ACTIONS_RUNNER_INPUT_JITCONFIG", "-e", "RUNNER_MANUALLY_TRAP_SIG"}
 		if a.DockerSocket {
 			args = append(args, "-v", "/var/run/docker.sock:/var/run/docker.sock")
 		}
@@ -132,12 +132,15 @@ func (a *Agent) runJob(ctx context.Context, n int) error {
 	}
 	// The runner reads ACTIONS_RUNNER_INPUT_* and scrubs it from its environment,
 	// which keeps the credential out of `ps` output, unlike --jitconfig.
-	cmd.Env = append(os.Environ(), "ACTIONS_RUNNER_INPUT_JITCONFIG="+jit.Config)
+	// RUNNER_MANUALLY_TRAP_SIG makes run.sh forward SIGINT to the listener; by
+	// default bash sits in `wait` and the listener never sees it (and as PID 1
+	// in a container, run.sh would ignore it outright).
+	cmd.Env = append(os.Environ(), "ACTIONS_RUNNER_INPUT_JITCONFIG="+jit.Config, "RUNNER_MANUALLY_TRAP_SIG=1")
 	out := &lineLogger{log: a.Log.WithField("runner", name)}
 	cmd.Stdout, cmd.Stderr = out, out
 	// On shutdown let the runner cancel its job and report back before killing it.
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
-	cmd.WaitDelay = 30 * time.Second
+	cmd.WaitDelay = 45 * time.Second
 
 	a.Log.Infof("%s: online, waiting for a job", name)
 	if err := cmd.Run(); err != nil && ctx.Err() == nil {
@@ -195,6 +198,9 @@ func (a *Agent) prepareHost(ctx context.Context) error {
 		return err
 	}
 	a.version = rel.Version
+	// A previous agent that was killed outright (SIGKILL, power loss) can leave
+	// listeners running in the slot directories; they would clash with new registrations.
+	_ = exec.CommandContext(ctx, "pkill", "-f", filepath.Join(a.Dir, "runners")+"/").Run()
 	file := fmt.Sprintf("actions-runner-%s-%s.tar.gz", platform, rel.Version)
 	tarball := filepath.Join(a.Dir, "downloads", file)
 	if _, err := os.Stat(tarball); err != nil {
