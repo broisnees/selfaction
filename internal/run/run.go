@@ -1,21 +1,30 @@
 // Package run executes a repository's GitHub Actions workflows locally with
-// nektos/act.
+// nektos/act, backed by selfaction's persistent cache.
 package run
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"text/tabwriter"
 
+	"github.com/nektos/act/pkg/common"
+	"github.com/nektos/act/pkg/common/git"
 	"github.com/nektos/act/pkg/container"
 	"github.com/nektos/act/pkg/gh"
 	"github.com/nektos/act/pkg/model"
 	"github.com/nektos/act/pkg/runner"
 	log "github.com/sirupsen/logrus"
+
+	"github.com/broisnischal/selfaction/internal/cache"
 )
 
 type Options struct {
@@ -33,6 +42,10 @@ type Options struct {
 	Arch        string   // container platform, e.g. linux/amd64
 	Concurrency int
 	Pull        bool
+	CacheDir    string // local cache store, used when CacheURL is empty
+	CacheURL    string // shared cache server base: http://host:port/<token>
+	NoCache     bool
+	CachePolicy cache.Policy
 }
 
 // DefaultPlatforms are the "medium" catthehacker images act recommends: small
@@ -108,6 +121,27 @@ func Run(ctx context.Context, o Options) error {
 		platforms[strings.ToLower(k)] = v
 	}
 
+	// Job containers reach the host through its LAN address, as act does.
+	ip := common.GetOutboundIP()
+	if ip == nil {
+		return errors.New("cannot determine this machine's outbound IP for the cache server")
+	}
+
+	if !o.NoCache {
+		scope := cache.ScopeOf(repoName(ctx, dir))
+		base := o.CacheURL
+		if base == "" {
+			stop, url, err := startCache(ctx, o.CacheDir, ip, o.CachePolicy)
+			if err != nil {
+				return fmt.Errorf("start cache server: %w", err)
+			}
+			defer stop()
+			base = url
+		}
+		env["ACTIONS_CACHE_URL"] = strings.TrimSuffix(base, "/") + "/" + scope + "/"
+		log.Infof("cache: scope %s", scope)
+	}
+
 	r, err := runner.New(&runner.Config{
 		Workdir:               dir,
 		EventName:             event,
@@ -132,6 +166,40 @@ func Run(ctx context.Context, o Options) error {
 		return err
 	}
 	return r.NewPlanExecutor(plan)(ctx)
+}
+
+// startCache serves a local store on an ephemeral port for the length of the run.
+func startCache(ctx context.Context, dir string, ip net.IP, p cache.Policy) (func(), string, error) {
+	store, err := cache.Open(dir)
+	if err != nil {
+		return nil, "", err
+	}
+	if n, _, err := store.GC(ctx, p); err == nil && n > 0 {
+		log.Infof("cache: evicted %d old entries", n)
+	}
+	ln, err := net.Listen("tcp", net.JoinHostPort(ip.String(), "0"))
+	if err != nil {
+		store.Close()
+		return nil, "", err
+	}
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	token := hex.EncodeToString(b)
+	srv := &http.Server{Handler: (&cache.Server{Store: store, Token: token, Log: log.StandardLogger()}).Handler()}
+	go func() { _ = srv.Serve(ln) }()
+	stop := func() {
+		_ = srv.Close()
+		_ = store.Close()
+	}
+	return stop, fmt.Sprintf("http://%s/%s", ln.Addr(), token), nil
+}
+
+// repoName is owner/repo from the origin remote, or the directory name.
+func repoName(ctx context.Context, dir string) string {
+	if repo, err := git.FindGithubRepo(ctx, dir, "github.com", "origin"); err == nil && repo != "" {
+		return repo
+	}
+	return filepath.Base(dir)
 }
 
 // pairs parses KEY=VALUE items. With fromEnv, a bare KEY takes its value from the environment.
