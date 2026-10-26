@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 )
 
@@ -56,6 +57,36 @@ func (g *GitHub) DeleteRunner(ctx context.Context, target string, id int64) erro
 		return nil
 	}
 	return err
+}
+
+// Release is an actions/runner release; SHA256 maps "osx-arm64" style
+// platforms to the tarball checksum published in the release notes.
+type Release struct {
+	Version string
+	SHA256  map[string]string
+}
+
+var shaRe = regexp.MustCompile(`<!-- BEGIN SHA ([a-z0-9_-]+) -->([0-9a-f]{64})<!-- END SHA`)
+
+// RunnerRelease fetches the latest (version "") or a specific actions/runner
+// release. Runner binaries always come from github.com, even for GHES.
+func RunnerRelease(ctx context.Context, client *http.Client, version string) (*Release, error) {
+	url := "https://api.github.com/repos/actions/runner/releases/latest"
+	if version != "" {
+		url = "https://api.github.com/repos/actions/runner/releases/tags/v" + strings.TrimPrefix(version, "v")
+	}
+	var res struct {
+		TagName string `json:"tag_name"`
+		Body    string `json:"body"`
+	}
+	if err := (&GitHub{HTTP: client}).do(ctx, "GET", url, nil, &res); err != nil {
+		return nil, fmt.Errorf("look up actions/runner release: %w", err)
+	}
+	rel := &Release{Version: strings.TrimPrefix(res.TagName, "v"), SHA256: map[string]string{}}
+	for _, m := range shaRe.FindAllStringSubmatch(res.Body, -1) {
+		rel.SHA256[m[1]] = m[2]
+	}
+	return rel, nil
 }
 
 type statusError struct {
