@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 
 	"github.com/nektos/act/pkg/gh"
 	log "github.com/sirupsen/logrus"
@@ -30,7 +32,7 @@ then ` + "`gh auth token`" + `. Repository runners need admin access to the repo
 (classic PAT scope "repo", or fine-grained "Administration: write");
 organization runners need "admin:org" / "Self-hosted runners: write".`,
 	}
-	cmd.AddCommand(agentStartCmd(), agentInstallCmd(), agentUninstallCmd())
+	cmd.AddCommand(agentStartCmd(), agentInstallCmd(), agentUninstallCmd(), agentCleanCmd())
 	return cmd
 }
 
@@ -201,4 +203,34 @@ func agentUninstallCmd() *cobra.Command {
 		Short: "Stop and remove the agent service",
 		RunE:  func(*cobra.Command, []string) error { return agent.Uninstall() },
 	}
+}
+
+func agentCleanCmd() *cobra.Command {
+	var tools, runners, docker bool
+	var dockerAge time.Duration
+	cmd := &cobra.Command{
+		Use:   "clean",
+		Short: "Free disk used by the agent (run while it is stopped)",
+		Long: `Wipes runner workspaces, diagnostics and leftover credentials. The agent
+already does this after every job; use it after a crash or to reclaim more space.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := agent.Clean(filepath.Join(homeDir, "agent"), tools, runners); err != nil {
+				return err
+			}
+			if docker {
+				if runtime.GOOS == "windows" {
+					return errors.New("--docker is not supported on windows")
+				}
+				out, err := agent.PruneDocker(cmd.Context(), dockerAge)
+				fmt.Print(string(out))
+				return err
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&tools, "tools", false, "also delete the tool cache used by actions/setup-* (re-downloaded on next use)")
+	cmd.Flags().BoolVar(&runners, "runners", false, "delete the runner installs and downloads entirely (re-downloaded on next start)")
+	cmd.Flags().BoolVar(&docker, "docker", false, "also prune Docker: stopped containers, unused networks, dangling images and build cache older than --docker-age. Affects the whole Docker host, not just CI")
+	cmd.Flags().DurationVar(&dockerAge, "docker-age", 72*time.Hour, "only prune Docker objects older than this")
+	return cmd
 }
