@@ -1,0 +1,74 @@
+---
+title: Install
+description: Install selfaction with go install, from source, or as a Docker image.
+sidebar:
+  order: 1
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+selfaction is a single Go binary. What else you need depends on how you use it:
+
+| You want to | You need |
+| --- | --- |
+| Build or install selfaction | Go 1.26 or newer |
+| Run workflows locally (`selfaction run`) | Docker |
+| Take jobs from GitHub on this machine (`selfaction agent`, host mode) | macOS or Linux, and a GitHub token |
+| Take jobs in fresh containers (`selfaction agent --mode docker`) | Docker, and a GitHub token |
+
+## Install
+
+<Tabs>
+<TabItem label="go install">
+
+```sh
+go install github.com/broisnischal/selfaction@latest
+```
+
+The binary lands in `$(go env GOPATH)/bin`. Add that directory to your `PATH` if `selfaction` is not found. With Go 1.21 or newer installed, Go downloads the 1.26 toolchain by itself.
+
+</TabItem>
+<TabItem label="From source">
+
+```sh
+git clone https://github.com/broisnischal/selfaction
+cd selfaction
+go build -o bin/selfaction .
+```
+
+</TabItem>
+<TabItem label="Docker image">
+
+```sh
+git clone https://github.com/broisnischal/selfaction
+cd selfaction
+docker build -t selfaction:local .
+docker run --rm selfaction:local --version
+```
+
+The image runs `selfaction cache serve` by default and stores its data in the `/data` volume. See [Docker Compose](/docs/guides/docker-compose/) for a ready-made setup.
+
+</TabItem>
+</Tabs>
+
+Check that it works:
+
+```sh
+selfaction --version
+```
+
+## Where selfaction keeps its data
+
+Everything lives under one directory, `~/.selfaction` by default. Change it with `--home` or the `SELFACTION_HOME` environment variable.
+
+| Path | Holds |
+| --- | --- |
+| `cache/` | The `actions/cache` store: an SQLite index and the archives |
+| `artifacts/` | Uploads from `actions/upload-artifact` during local runs |
+| `agent/runners/` | The GitHub runner, unpacked once per slot |
+| `agent/downloads/` | The runner release archive, verified against its published checksum |
+| `agent.log` | Agent output when it runs as a service |
+
+<Aside>
+Nothing outside this directory is changed, except a launchd or systemd entry if you run `selfaction agent install`.
+</Aside>
