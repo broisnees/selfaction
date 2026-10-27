@@ -1,0 +1,57 @@
+---
+title: How it works
+description: What happens inside selfaction run, agent and cache.
+sidebar:
+  order: 1
+---
+
+selfaction reuses the two best-tested pieces that already exist: the [act](https://github.com/nektos/act) engine for local runs, and GitHub's own [runner](https://github.com/actions/runner) for real CI. What it adds is the plumbing around them: the runner lifecycle, the cache and the cleanup.
+
+## `selfaction run`
+
+1. act's planner reads the workflow files and works out which jobs the event triggers, and in which stages.
+2. Before any job starts, selfaction opens a cache server and an artifact server on this machine's network address. Job containers reach the host through that address, the same way act does.
+3. Each job runs in a container made from the image its `runs-on` label maps to. The repository is copied in, and the job receives `ACTIONS_CACHE_URL` and `ACTIONS_RUNTIME_URL`, so `actions/cache` and `actions/upload-artifact` talk to the local servers.
+4. When the run ends, both servers stop. The cache store on disk stays for the next run.
+
+## `selfaction agent`
+
+The agent never edits runner configuration files and never keeps a long-lived registration. For every job, each slot does this:
+
+```txt
+        ┌──────────────────────────────────────────────────────┐
+        ▼                                                      │
+  register ── POST …/actions/runners/generate-jitconfig        │
+        │     (name, labels, runner group) → single-use config  │
+        ▼                                                      │
+  run     ── GitHub's runner, config passed in the environment  │
+        │     waits for a matching job, runs it, then exits     │
+        ▼                                                      │
+  reset   ── delete workspace, diagnostics, credentials ───────┘
+              and the registration if it still exists
+```
+
+Some details that matter:
+
+- **Just-in-time registrations.** GitHub issues a configuration that is valid for one job. The agent passes it as `ACTIONS_RUNNER_INPUT_JITCONFIG`. The runner reads that variable and removes it from its environment, which keeps the credential out of process listings.
+- **The runner itself.** In host mode the agent downloads the latest `actions/runner` release, checks its SHA-256 against the value GitHub publishes in the release notes, and unpacks one copy per slot. Each copy needs its own directory because a registration writes its credentials there.
+- **A home per slot.** Host-mode jobs get `HOME` set to the slot's `_home` directory, so language caches and dotfiles belong to the slot rather than to you.
+- **Stopping.** The runner's start script only passes an interrupt on to the runner when `RUNNER_MANUALLY_TRAP_SIG` is set, so the agent sets it. On Ctrl-C or SIGTERM a running job is cancelled and reported, and the registration is deleted.
+- **Health.** Every two minutes the agent asks GitHub whether each runner is online, and restarts one that is reported offline twice in a row.
+
+## `selfaction cache`
+
+The store is a directory holding an SQLite index and one file per archive. SQLite runs in write-ahead-log mode, so the server and the cleanup commands can use the same store at the same time.
+
+| Request | Purpose |
+| --- | --- |
+| `GET  /{token}/{scope}/_apis/artifactcache/cache?keys=…&version=…` | Find an entry to restore |
+| `POST /{token}/{scope}/_apis/artifactcache/caches` | Reserve a new entry |
+| `PATCH /{token}/{scope}/_apis/artifactcache/caches/{id}` | Upload one chunk, at the offset in `Content-Range` |
+| `POST /{token}/{scope}/_apis/artifactcache/caches/{id}` | Commit, checking the final size |
+| `GET  /{token}/{scope}/_apis/artifactcache/artifacts/{id}` | Download, with range support |
+
+- **Immutable entries.** An entry is identified by scope, version and key. Saving a key that already exists, or one another job is uploading, is refused, as on GitHub.
+- **Out-of-order chunks.** `actions/cache` uploads several chunks at once. Each is written at its own offset, so order does not matter.
+- **Lookups.** For each restore key in order, an exact match wins; otherwise the newest entry whose key starts with that key.
+- **Retention.** Entries past their time to live go first, then the least recently used ones until each repository, and the store, fit their limits. Stalled uploads and stray files are removed too.
