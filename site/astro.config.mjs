@@ -10,6 +10,7 @@ export default defineConfig({
 		starlight({
 			title: 'selfaction',
 			description: 'Run GitHub Actions on machines you own: your laptop, a server or Docker.',
+			favicon: '/favicon.svg',
 			components: {
 				Hero: './src/components/Hero.astro',
 				SocialIcons: './src/components/HeaderLinks.astro',
