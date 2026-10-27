@@ -2,11 +2,11 @@
 
 ## Step 3: server mode (webhooks, job queue, workers)
 
-Done and pushed: `internal/server` (webhook receiver, trigger filters, SQLite queue, worker API, job pages, commit statuses) and `internal/worker` (claim, shallow fetch, act run, log streaming, cancel). Both have tests (`go test -race ./...`). Nothing calls them from the CLI yet.
+Done and pushed: `internal/server` (webhook receiver, trigger filters, SQLite queue, worker API, job pages, commit statuses) and `internal/worker` (claim, shallow fetch, act run, log streaming, cancel). Both have tests (`go test -race ./...`). `selfaction server` and `selfaction worker` run them, with the shared cache mounted at `/cache/`; checked locally against a fake GitHub API (cache hit on the second push, cancel through `server cancel`).
 
 ### 1. CLI commands
 
-- [ ] `selfaction server` in a new `cli_server.go`. Builds a `server.Server`, starts `RunReaper`, and serves `Handler()`.
+- [x] `selfaction server` in a new `cli_server.go`. Builds a `server.Server`, starts `RunReaper`, and serves `Handler()`.
   - `--addr` (default `:8080`)
   - `--external-url`: public base URL, used in status links
   - `--webhook-secret`: required; also read from `$SELFACTION_WEBHOOK_SECRET`. Refuse to start without it.
@@ -16,41 +16,44 @@ Done and pushed: `internal/server` (webhook receiver, trigger filters, SQLite qu
   - `--workflows` (default `.github/workflows`). Suggest `.selfaction/workflows` when GitHub Actions also runs the repo, so jobs don't run twice.
   - `--allow-forks` (default off)
   - store in `<home>/server`
-- [ ] `selfaction worker` in a new `cli_worker.go`. Builds a `worker.Worker`.
+- [x] `selfaction worker` in a new `cli_worker.go`. Builds a `worker.Worker`.
   - `--server`, `--token`, `--name` (hostname, as `runnerName` in `cli_agent.go`), `--slots`
   - `--labels`: default to the keys of `run.DefaultPlatforms()` plus any extras
   - `-P/--platform`, `--container-architecture`, `--job-timeout`
   - data in `<home>/worker`
-- [ ] `server jobs` / `server cancel <id>` helpers, or document `GET /api/v1/jobs` and `POST /api/v1/jobs/{id}/cancel` (Bearer worker token).
+- [x] `server jobs` / `server cancel <id>` helpers, or document `GET /api/v1/jobs` and `POST /api/v1/jobs/{id}/cancel` (Bearer worker token).
 
 ### 2. Shared cache for workers
 
-- [ ] In `selfaction server`, open a `cache.Store` at `<home>/server/cache` and mount `cache.Server.Handler()` under `/cache/` with `http.StripPrefix`.
-- [ ] Set `Server.CacheURL` to `<external-url>/cache/<cache-token>`. Workers already pass `Claim.CacheURL` to `run.Options.CacheURL`.
-- [ ] Run `cache.Server.RunGC` with the default policy, and add `--no-cache`.
+- [x] In `selfaction server`, open a `cache.Store` at `<home>/server/cache` and mount `cache.Server.Handler()` under `/cache/` with `http.StripPrefix`.
+- [x] Set `Server.CacheURL` to `<external-url>/cache/<cache-token>`. Workers already pass `Claim.CacheURL` to `run.Options.CacheURL`.
+- [x] Run `cache.Server.RunGC` with the default policy, and add `--no-cache`.
 
 ### 3. Worker fix
 
-- [ ] In `worker.work`, when the server cancelled the job (the `cancelled` channel closed), skip `POST /finish`. The job is already final on the server, so that post only produces a 409 in the worker log (visible in `TestWorkerRunsClaimedJobs`).
+- [x] In `worker.work`, when the server cancelled the job (the `cancelled` channel closed), skip `POST /finish`. The job is already final on the server, so that post only produces a 409 in the worker log (visible in `TestWorkerRunsClaimedJobs`).
+- [x] Found during this: a worker stopped with Ctrl-C posted `/finish` with its cancelled context, so the job stayed running until the reaper failed it. `/finish` now gets its own deadline (`TestStoppingTheWorkerCancelsItsJobs`).
 
 ### 4. Real end-to-end test
 
-- [ ] Run `selfaction server --external-url <tunnel> --webhook-secret …` and `selfaction worker --server http://localhost:8080 --token …`.
-- [ ] Expose the server: `cloudflared tunnel --url http://localhost:8080` prints a `trycloudflare.com` URL. Use it as `--external-url`.
-- [ ] Add a repository webhook for `push` and `pull_request`, content type `application/json`, with the secret:
+- [x] Run `selfaction server --external-url <tunnel> --webhook-secret …` and `selfaction worker --server http://localhost:8080 --token …`.
+- [x] Expose the server: `cloudflared tunnel --url http://localhost:8080` prints a `trycloudflare.com` URL. Use it as `--external-url`.
+- [x] Add a repository webhook for `push` and `pull_request`, content type `application/json`, with the secret:
   `gh api repos/broisnees/selfaction/hooks -f name=web -F active=true -f 'events[]=push' -f 'events[]=pull_request' -f config[url]=<tunnel>/webhooks/github -f config[content_type]=json -f config[secret]=…`
-- [ ] Add a workflow under `.selfaction/workflows/` (and run the server with `--workflows .selfaction/workflows`), push, and check:
+- [x] Add a workflow under `.selfaction/workflows/` (and run the server with `--workflows .selfaction/workflows`), push, and check:
   - the commit shows `selfaction/<name> (push)` going from pending to success
   - the status link opens the live log page
   - a cancel through the API stops the job
   - a second push gets a cache hit through the server's cache
-- [ ] Delete the webhook afterwards if the tunnel URL is temporary.
+- [x] Delete the webhook afterwards if the tunnel URL is temporary.
+
+Done on 2026-10-27 against this repository, through a quick tunnel: on 0e50436 `selfaction/ci (push)` went Queued, Running, Passed in 1m 48s and saved a 312 MB module cache through the server; on ebd3875 the cache was restored (`cache-hit=true`) and `server cancel` stopped the job 4 s later, with the status set to Cancelled.
 
 ### 5. Docs, site and extras
 
-- [ ] Docs page `site/src/content/docs/docs/guides/server.mdx`: how it works, setup, flags, security (fork PRs are skipped by default; job log URLs are unguessable; workers hold the server's GitHub token).
-- [ ] CLI reference entries in `site/src/content/docs/docs/reference/cli.mdx`.
-- [ ] README section, and remove "Server mode" from the roadmap there and on the site.
+- [x] Docs page `site/src/content/docs/docs/guides/server.mdx`: how it works, setup, flags, security (fork PRs are skipped by default; job log URLs are unguessable; workers hold the server's GitHub token).
+- [x] CLI reference entries in `site/src/content/docs/docs/reference/cli.mdx`.
+- [x] README section, and remove "Server mode" from the roadmap there and on the site.
 - [ ] Blog post once the real end-to-end run works.
 - [ ] Optional: GitHub App authentication.
   - Sign a JWT (RS256) with the app's private key and exchange it at `/app/installations/{id}/access_tokens`, using `installation.id` from the delivery.
