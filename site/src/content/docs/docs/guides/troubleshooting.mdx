@@ -28,7 +28,7 @@ Usually the machine slept and the runner's connection went stale. The agent chec
 These actions save their caches to GitHub after the job and download them before the next one. On a machine that keeps its caches between jobs, that is wasted time, and a large cache can take minutes. Turn it off:
 
 ```yaml
-- uses: actions/setup-go@v5
+- uses: actions/setup-go@v7
   with:
     go-version-file: go.mod
     cache: false

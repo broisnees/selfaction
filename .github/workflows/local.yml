@@ -23,8 +23,8 @@ jobs:
           echo "user:    $(whoami)"
           echo "workdir: $GITHUB_WORKSPACE"
           uname -a
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: false # the runner keeps its module cache between jobs
