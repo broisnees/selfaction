@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+
+	"github.com/broisnees/selfaction/internal/github"
 )
 
 // fakeGitHub records runner registrations and deletions.
@@ -73,7 +75,7 @@ func TestRunJobHostMode(t *testing.T) {
 	log.Out = &logs
 	a := &Agent{
 		Config:  Config{Target: "octo/app", Name: "box", Mode: "host", GroupID: 1, Dir: t.TempDir(), Labels: []string{"gpu", "GPU", "self-hosted"}},
-		GitHub:  &GitHub{API: srv.URL, Token: "tkn"},
+		GitHub:  &GitHub{Client: github.Client{API: srv.URL, Token: "tkn"}},
 		Log:     log,
 		version: "2.0.0",
 	}
@@ -202,7 +204,7 @@ func TestRunJobRestartsOfflineRunner(t *testing.T) {
 	defer srv.Close()
 	a := &Agent{
 		Config:      Config{Target: "octo/app", Name: "box", Mode: "host", Dir: t.TempDir()},
-		GitHub:      &GitHub{API: srv.URL, Token: "tkn"},
+		GitHub:      &GitHub{Client: github.Client{API: srv.URL, Token: "tkn"}},
 		Log:         logrus.New(),
 		version:     "2.0.0",
 		healthEvery: 20 * time.Millisecond,

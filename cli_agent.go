@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/broisnees/selfaction/internal/agent"
+	"github.com/broisnees/selfaction/internal/github"
 )
 
 func agentCmd() *cobra.Command {
@@ -135,7 +136,7 @@ func agentStartCmd() *cobra.Command {
 			a.cfg.Dir = filepath.Join(homeDir, "agent")
 			ag := &agent.Agent{
 				Config: a.cfg,
-				GitHub: &agent.GitHub{API: strings.TrimSuffix(a.api, "/"), Token: token},
+				GitHub: &agent.GitHub{Client: github.Client{API: strings.TrimSuffix(a.api, "/"), Token: token}},
 				Log:    log.StandardLogger(),
 			}
 			return ag.Run(ctx)
