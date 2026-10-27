@@ -59,6 +59,46 @@ Done on 2026-10-27 against this repository, through a quick tunnel: on 0e50436 `
   - Sign a JWT (RS256) with the app's private key and exchange it at `/app/installations/{id}/access_tokens`, using `installation.id` from the delivery.
   - That gives short-lived per-repository tokens instead of one personal token, and enables the Checks API.
 
+## Step 4: build for every platform, from any computer
+
+Goal: one push builds for Linux, macOS, Windows, Android and iOS, and the server, a worker or `selfaction run` works on a Linux, Mac or Windows machine. The OS a job needs decides which worker runs it. Apple's license only allows macOS on Apple hardware, so macOS and iOS jobs always land on a Mac worker. "From any computer" means triggering and watching them from anywhere while the server routes each job to a worker that can run it.
+
+Where it stands (2026-10-27):
+
+- `go build` succeeds for linux, darwin and windows on amd64 and arm64, but there are no release binaries; installing needs Go.
+- `run` and `worker` map `ubuntu-*` to Docker images, and `macos-*` to the host only when running on a Mac. There is no `windows-*` label.
+- `agent` host mode downloads the runner for `osx` and `linux` only; on Windows only `--mode docker` works. `agent install` knows launchd and systemd, not Windows services.
+- Server mode claims a whole workflow as one job, and the worker must carry every `runs-on` label in it. A workflow with a macOS, a Windows and a Linux job can never be claimed.
+- Server-mode jobs get no secrets, so signing (Apple certificates and provisioning profiles, Android keystores, Windows code signing) can't work yet.
+- Artifacts uploaded by a worker's job stay on that worker (`<home>/worker/artifacts/<job id>`); nothing brings them back to the server.
+
+### 1. Install and run on any computer
+
+- [ ] Release workflow: on a tag, build linux, darwin and windows for amd64 and arm64, and attach the archives and checksums to a GitHub release.
+- [ ] Install script for Linux and macOS, and a zip (later scoop or winget) for Windows. Update the install guide.
+- [ ] Test `run`, `server`, `worker` and `cache` on Windows and fix what breaks: paths, stopping (Ctrl-C and service stop), Docker Desktop.
+- [ ] `agent install` and a worker service on Windows (a Windows service or a scheduled task).
+
+### 2. Split server-mode jobs per workflow job
+
+- [ ] Queue each job of a workflow on its own, with its own `runs-on` labels, and release a job once everything in its `needs` has passed. act already runs a single job (`run.Options.Job`); find out how to feed `needs.<job>.outputs` from jobs that ran on other workers.
+- [ ] Expand `strategy.matrix` (for example `os: [ubuntu-latest, macos-latest, windows-latest]`) into separate jobs before they are claimed.
+- [ ] One commit status per job, such as `selfaction/build (macos-latest) (push)`.
+
+### 3. Platforms
+
+- [ ] **Linux**: amd64 works in Docker. Test arm64 on an amd64 host with `--container-architecture linux/arm64` and QEMU (binfmt).
+- [ ] **macOS**: a Mac worker runs `macos-*` jobs on the host. Check what host-mode jobs share between runs (HOME, tool caches); the agent gives each slot its own HOME. Look at Tart VMs on Apple silicon for jobs that need isolation.
+- [ ] **iOS**: on a Mac worker with Xcode (`--labels xcode`). Start with an unsigned simulator build with `xcodebuild`, then a signed archive once secrets exist.
+- [ ] **Windows**: `windows-latest` and `windows-2022` labels that run on the host of a Windows worker. Check act's host mode on Windows with the `pwsh`, `powershell` and `cmd` shells.
+- [ ] **Android**: a Linux image with the Android SDK, mapped with `-P android=<image>`. Test a Gradle `assembleDebug`. Emulator tests need KVM on the worker.
+- [ ] `.selfaction/workflows/platforms.yml`: build a small sample app on all five and use it as the end-to-end test.
+
+### 4. Secrets and artifacts for real builds
+
+- [ ] Per-repository secrets on the server, encrypted at rest, passed to jobs as `secrets.*` and never shown on job pages.
+- [ ] Send uploaded artifacts back to the server, link them from the job page, and expire them like caches.
+
 ## Other open items
 
 - [ ] Dependabot alert #24 / PR #3 (`moby/go-archive` 0.3.x): it breaks act v0.2.89 (`archive.Uncompressed` was removed). act only creates tar archives, and the advisory is about extracting them, so the vulnerable path isn't used. Dismiss the alert as "vulnerable code not used", or upgrade when an act release supports go-archive 0.3.
