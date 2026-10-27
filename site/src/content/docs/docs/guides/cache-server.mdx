@@ -1,0 +1,61 @@
+---
+title: Share a cache server
+description: Run one actions/cache server for every selfaction run on your network.
+sidebar:
+  order: 4
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Every `selfaction run` has a cache of its own on the machine it runs on. A cache server lets a team, or several machines, share one: the second person to build a branch restores what the first person saved.
+
+## Start the server
+
+```sh
+selfaction cache serve
+```
+
+```txt
+cache server on :7979 (store /home/you/.selfaction/cache)
+use it with: selfaction run --cache-url http://<this-host>:7979/<token>
+```
+
+The token is generated on first start and kept in `<store>/token`. Pass `--token`, or set `SELFACTION_CACHE_TOKEN`, to choose your own. Point runs at the server:
+
+```sh
+selfaction run --cache-url http://cache.lan:7979/<token>
+```
+
+## How jobs find their cache
+
+A job receives `ACTIONS_CACHE_URL=<server>/<token>/<scope>/`, where the scope is the repository as `owner.repo`. Each repository only sees its own entries, so two projects that both use a key like `node-modules-linux` never restore each other's files.
+
+The server speaks version 1 of the `actions/cache` HTTP protocol, the one act and GitHub Enterprise Server use. `actions/cache` v4, v5 and v6 work with it unchanged, as does any action built on `@actions/cache`, such as `actions/setup-go` and `actions/setup-node`.
+
+Restore keys behave as on GitHub. For each key in order, an exact match wins; otherwise the newest entry whose key starts with that key is used.
+
+<Aside>
+Jobs that run on GitHub's own runner, including those sent to `selfaction agent`, keep using GitHub's cache service. The server backs `selfaction run` and other act-based runners.
+</Aside>
+
+## Retention
+
+The server applies its limits at start and every 10 minutes (`--gc-interval`):
+
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `--ttl` | `168h` | Entries not used for this long are removed |
+| `--max-repo-size` | `10GB` | Each repository keeps at most this much, least recently used removed first |
+| `--max-total-size` | `0` (no limit) | The whole store keeps at most this much |
+
+Uploads that stall for 30 minutes are dropped, and archive files without an index entry are removed. Restoring an entry counts as using it.
+
+## Behind a proxy
+
+Download links in cache responses use the host name the job connected to. When the server sits behind a reverse proxy or TLS terminator, give the public address:
+
+```sh
+selfaction cache serve --external-url https://cache.example.com
+```
+
+To run the server in a container, see [Docker Compose](/docs/guides/docker-compose/). To inspect or prune its contents, see [Cleaning up](/docs/guides/cleaning-up/).
