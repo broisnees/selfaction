@@ -47,7 +47,7 @@ func runCmd() *cobra.Command {
 	f.StringVarP(&o.EventPath, "eventpath", "e", "", "event payload JSON file")
 	f.BoolVarP(&o.List, "list", "l", false, "list the jobs that would run")
 	f.StringArrayVarP(&o.Platforms, "platform", "P", nil, "runs-on label=image (image -self-hosted runs on this machine)")
-	f.StringArrayVarP(&o.Secrets, "secret", "s", nil, "secret KEY=VALUE, or KEY to read from the environment (GITHUB_TOKEN defaults to `gh auth token`)")
+	f.StringArrayVarP(&o.Secrets, "secret", "s", nil, "secret KEY=VALUE, or KEY to read from the environment (GITHUB_TOKEN defaults to the gh CLI login)")
 	f.StringArrayVar(&o.Vars, "var", nil, "configuration variable KEY=VALUE")
 	f.StringArrayVar(&o.Env, "env", nil, "environment variable KEY=VALUE")
 	f.StringArrayVar(&o.Matrix, "matrix", nil, "only run matrix combinations with key:value")
@@ -55,7 +55,7 @@ func runCmd() *cobra.Command {
 	f.IntVar(&o.Concurrency, "concurrency", 0, "max parallel jobs (default: CPU count)")
 	f.BoolVar(&o.Pull, "pull", false, "always pull job images")
 	f.StringVar(&o.CacheDir, "cache-dir", "", "local cache store (default <home>/cache)")
-	f.StringVar(&o.CacheURL, "cache-url", "", "use a `selfaction cache serve` server instead of the local store: http://host:port/<token>")
+	f.StringVar(&o.CacheURL, "cache-url", "", "shared cache server from selfaction cache serve, instead of the local store: http://host:port/<token>")
 	f.BoolVar(&o.NoCache, "no-cache", false, "disable actions/cache support")
 	f.BoolVar(&artifacts, "artifacts", true, "serve actions/upload-artifact (stored in <home>/artifacts)")
 	return cmd
