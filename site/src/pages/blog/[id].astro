@@ -16,11 +16,13 @@ const { Content, headings } = await render(post);
 	headings={headings}
 	hasSidebar={false}
 >
-	<p class="not-content text-sm text-ink-soft">
-		<time datetime={post.data.date.toISOString()}>{formatDate(post.data.date)}</time>, {minutes(post.body)} minute read
-	</p>
-	<Content />
-	<p class="not-content mt-12 border-t border-rule pt-6">
-		<a href="/blog/" class="font-semibold text-ink decoration-signal decoration-2 underline-offset-4">All posts</a>
-	</p>
+	<article class="max-w-[45rem]">
+		<p class="not-content text-sm text-ink-soft">
+			<time datetime={post.data.date.toISOString()}>{formatDate(post.data.date)}</time>, {minutes(post.body)} minute read
+		</p>
+		<Content />
+		<p class="not-content mt-12 border-t border-rule pt-6">
+			<a href="/blog/" class="font-semibold text-ink decoration-signal decoration-2 underline-offset-4">All posts</a>
+		</p>
+	</article>
 </StarlightPage>
