@@ -1,0 +1,85 @@
+---
+title: Run workflows locally
+description: Run a repository's GitHub Actions workflows on your machine with selfaction run.
+sidebar:
+  order: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`selfaction run` reads `.github/workflows`, works out which jobs an event would trigger, and runs them in Docker on your machine. Nothing is pushed and GitHub is not involved, so it is the quickest way to check a workflow change.
+
+## First run
+
+From the root of a repository:
+
+```sh
+selfaction run --list    # the jobs that would run, with their stage and events
+selfaction run           # run them
+```
+
+With no event given, selfaction uses the only event your workflows listen to, or `push` when there are several. Name one to choose:
+
+```sh
+selfaction run pull_request
+selfaction run pull_request -j test        # only the job with id "test"
+selfaction run -W .github/workflows/ci.yml # only this workflow file
+```
+
+Jobs in the same stage run in parallel, up to one per CPU. Limit that with `--concurrency`. Press Ctrl-C once to cancel jobs and let their post steps run, twice to stop at once.
+
+## Images and runners
+
+Each `runs-on` label maps to a Docker image. The defaults are the medium-sized images the act project maintains, which are complete enough for most marketplace actions:
+
+| `runs-on` | Runs in |
+| --- | --- |
+| `ubuntu-latest`, `ubuntu-24.04`, `ubuntu-22.04`, `ubuntu-20.04` | `catthehacker/ubuntu:act-*` |
+| `self-hosted` | Directly on this machine |
+| `macos-latest`, `macos-15`, `macos-14`, `macos-13` (on a Mac) | Directly on this machine |
+
+Override or add mappings with `-P`. The special image `-self-hosted` runs that label on the host:
+
+```sh
+selfaction run -P ubuntu-latest=catthehacker/ubuntu:full-latest   # closer to GitHub's image, much larger
+selfaction run -P gpu=-self-hosted                                 # run "runs-on: gpu" jobs on this machine
+```
+
+On Apple silicon, images run as `linux/arm64` when they offer it. For an image that is amd64-only, add `--container-architecture linux/amd64`.
+
+## Secrets, variables and inputs
+
+```sh
+selfaction run -s NPM_TOKEN                 # read NPM_TOKEN from your environment
+selfaction run -s DEPLOY_KEY=xyz            # or give the value
+selfaction run --var REGION=eu-west-1       # ${{ vars.REGION }}
+selfaction run --env DEBUG=1                # extra environment for every job
+selfaction run --matrix node:20             # only matrix combinations where node is 20
+selfaction run -e event.json                # a custom event payload
+```
+
+`GITHUB_TOKEN` comes from your GitHub CLI login when you do not pass it.
+
+## Caching and artifacts
+
+`actions/cache` works with no setup. selfaction starts a cache server for the length of the run and points jobs at it. Archives are stored in `~/.selfaction/cache`, under the repository's `owner.repo` scope taken from the `origin` remote, or the directory name when there is none. A second run restores what the first one saved.
+
+To share one cache with your team, point every run at a [cache server](/docs/guides/cache-server/):
+
+```sh
+selfaction run --cache-url http://cache.lan:7979/<token>
+```
+
+`actions/upload-artifact` and `download-artifact` also work. Uploaded files land in `~/.selfaction/artifacts`. Turn either feature off with `--no-cache` or `--artifacts=false`.
+
+## What is different from GitHub
+
+Local runs use the [act](https://github.com/nektos/act) engine rather than GitHub's runner, so a few things differ:
+
+- The repository is copied into the job container, skipping files that `.gitignore` excludes. `actions/checkout` uses that copy instead of cloning.
+- Features that need GitHub itself, such as OIDC tokens, environments with required reviewers and the GitHub-hosted image's full tool set, are not available.
+- If a step needs every detail of GitHub's runner, run it on a real runner with [`selfaction agent`](/docs/guides/runner-agent/).
+
+<Aside type="tip">
+The first run pulls the job image: `catthehacker/ubuntu:act-latest` is about 550 MB to download and 2.3 GB on disk. Later runs start in seconds.
+</Aside>
