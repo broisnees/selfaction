@@ -1,0 +1,57 @@
+---
+title: Troubleshooting
+description: Fixes for the problems people actually hit with selfaction.
+sidebar:
+  order: 7
+---
+
+## "The job was not started because your account is locked due to a billing issue"
+
+GitHub refuses to start jobs on its hosted runners for that account. It reports this as a failed check, or as a run that ends in `startup_failure` with no jobs. Self-hosted runners are not affected: jobs with `runs-on: [self-hosted, …]` still run on a selfaction agent. To use GitHub's runners again, fix the payment method or spending limit under **Settings → Billing and plans** on GitHub.
+
+## A job stays queued
+
+No online runner has every label in the job's `runs-on`. List the runners GitHub knows about and compare:
+
+```sh
+gh api repos/you/app/actions/runners --jq '.runners[] | "\(.name) \(.status) \([.labels[].name] | join(","))"'
+```
+
+Remember that host-mode runners on a Mac carry `macOS`, while Docker-mode runners carry `Linux`.
+
+## A runner shows as offline
+
+Usually the machine slept and the runner's connection went stale. The agent checks every two minutes and restarts a runner that GitHub reports offline twice in a row, so it comes back within about five minutes of the machine waking. If the agent itself is gone, start it again or [install it as a service](/docs/guides/runner-agent/#keep-it-running).
+
+## setup-go or setup-node is slow on a self-hosted runner
+
+These actions save their caches to GitHub after the job and download them before the next one. On a machine that keeps its caches between jobs, that is wasted time, and a large cache can take minutes. Turn it off:
+
+```yaml
+- uses: actions/setup-go@v5
+  with:
+    go-version-file: go.mod
+    cache: false
+```
+
+Early builds of the agent ran host-mode jobs with your own home directory, so setup-go could upload your entire Go module cache to GitHub. If you ran one of those builds, delete the copies with `gh cache delete --all --repo you/app`.
+
+## "error obtaining VCS status" in a local run
+
+Go stamps builds with version control information, and fails in a repository that has no commits yet. Commit once, or build with `-buildvcs=false`.
+
+## An image fails on Apple silicon
+
+The image may only exist for amd64. Run it under emulation:
+
+```sh
+selfaction run --container-architecture linux/amd64
+```
+
+## The Docker-mode log is noisy
+
+The runner image copies its internal diagnostic log to its output. selfaction shows those lines only with `-v`.
+
+## Something else
+
+Run with `-v` for debug output, and [open an issue](https://github.com/broisnischal/selfaction/issues) with what you ran and what it printed.
