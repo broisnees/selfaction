@@ -3,12 +3,13 @@ title: Overview
 description: What selfaction does and which command to reach for.
 ---
 
-selfaction runs GitHub Actions workflows on hardware you control. It is one binary with three jobs:
+selfaction runs GitHub Actions workflows on hardware you control. It is one binary with four jobs:
 
 | You want to… | Use | What happens |
 | --- | --- | --- |
 | Try a workflow before pushing it | `selfaction run` | The workflow runs on this machine in Docker, using the [act](https://github.com/nektos/act) engine. `actions/cache` and artifacts work. |
 | Have GitHub send jobs to your machine | `selfaction agent` | Your machine registers as a GitHub self-hosted runner. Jobs with `runs-on: [self-hosted, <label>]` run here using GitHub's official runner. |
+| Run CI from webhooks, without GitHub's runner service | `selfaction server` and `selfaction worker` | GitHub sends webhooks to your server, which queues the workflows they trigger. Workers run them with the act engine and report back as commit statuses. |
 | Share a dependency cache across runs and machines | `selfaction cache` | A cache server that speaks the `actions/cache` protocol, with per-repository storage and cleanup tools. |
 
 Your workflow files do not change. Marketplace actions such as `actions/checkout`, `actions/setup-go` and `actions/cache` work as they are.
@@ -19,6 +20,8 @@ Your workflow files do not change. Marketplace actions such as `actions/checkout
 
 **`agent`** is for real CI. GitHub still decides when a workflow runs, shows the logs and reports the result on your pull request. Only the execution moves to your machine. Use it when hosted runners are too slow, too expensive, lack the hardware you need (Apple silicon, a GPU, lots of RAM) or are unavailable to your account.
 
+**`server`** is CI without GitHub Actions. GitHub only sends webhooks: the queue, the logs and the machines are yours, and results show on commits and pull requests as statuses. It works for repositories where GitHub Actions is turned off or unavailable, at the cost of some compatibility: only `push` and `pull_request` start jobs, and repository secrets are not passed to jobs.
+
 **`cache`** is for teams. One `selfaction cache serve` instance can back every `selfaction run` on a network, so the second person to build a branch gets the first person's dependencies.
 
 ## Next steps
@@ -26,3 +29,4 @@ Your workflow files do not change. Marketplace actions such as `actions/checkout
 - [Install selfaction](/docs/guides/install/)
 - [Run a workflow locally](/docs/guides/run-locally/)
 - [Use your machine as a GitHub runner](/docs/guides/runner-agent/)
+- [Run workflows from webhooks](/docs/guides/server/)

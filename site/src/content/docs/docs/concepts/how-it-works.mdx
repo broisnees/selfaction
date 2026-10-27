@@ -1,6 +1,6 @@
 ---
 title: How it works
-description: What happens inside selfaction run, agent and cache.
+description: What happens inside selfaction run, agent, server and cache.
 sidebar:
   order: 1
 ---
@@ -38,6 +38,28 @@ Some details that matter:
 - **A home per slot.** Host-mode jobs get `HOME` set to the slot's `_home` directory, so language caches and dotfiles belong to the slot rather than to you.
 - **Stopping.** The runner's start script only passes an interrupt on to the runner when `RUNNER_MANUALLY_TRAP_SIG` is set, so the agent sets it. On Ctrl-C or SIGTERM a running job is cancelled and reported, and the registration is deleted.
 - **Health.** Every two minutes the agent asks GitHub whether each runner is online, and restarts one that is reported offline twice in a row.
+
+## `selfaction server` and `selfaction worker`
+
+1. The server checks the webhook's HMAC signature, records the delivery id so a redelivery runs nothing twice, and answers before planning anything: GitHub gives up on deliveries that take longer than 10 seconds.
+2. It lists the workflow directory at the pushed commit through the contents API, parses each file with act's parser and applies GitHub's trigger filters. For a pull request it also lists the changed files, for path filters. Each workflow that matches becomes a row in an SQLite queue, together with the union of its jobs' `runs-on` labels.
+3. Workers long-poll for work: the server holds a claim request for up to 25 seconds until a job arrives. The oldest queued job whose labels the worker carries is claimed in one transaction, so two workers never get the same job.
+4. The worker fetches the commit with `git fetch --depth 1`. The token travels as an HTTP header set through the environment, so it is neither written to `.git/config` nor visible in process listings.
+5. Output goes to the server every two seconds. Each upload is also the heartbeat, and its answer carries the job's status, so a job cancelled on the server stops on the worker within one upload. A job without a heartbeat for 3 minutes fails.
+
+| Request | Purpose |
+| --- | --- |
+| `POST /webhooks/github` | Signed deliveries from GitHub |
+| `POST /api/v1/claim` | Wait for a job with these labels |
+| `POST /api/v1/jobs/{id}/log` | Append output; also the heartbeat |
+| `POST /api/v1/jobs/{id}/finish` | Report the result |
+| `POST /api/v1/jobs/{id}/cancel` | Cancel a queued or running job |
+| `GET  /api/v1/jobs` | The latest 100 jobs |
+| `GET  /jobs/{id}` | The job page, with the live log |
+| `GET  /jobs/{id}/log` | The raw log |
+| `/cache/…` | The `actions/cache` API described below, for workers |
+
+Requests under `/api/v1/` need the worker token as a bearer token.
 
 ## `selfaction cache`
 

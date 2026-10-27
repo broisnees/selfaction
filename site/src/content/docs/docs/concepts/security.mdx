@@ -52,6 +52,10 @@ Bots push branches too. Dependabot pushes a branch for every update it proposes,
 - **Runner registrations** are single-use. Their credentials are passed through the environment rather than on the command line, and deleted from the slot after each job.
 - **The runner binary** is checked against the SHA-256 that GitHub publishes for each release before it is unpacked.
 
+## Server mode
+
+`selfaction server` skips pull requests from forks unless you pass `--allow-forks`, and refuses webhook deliveries without a valid signature. Its workers receive the server's GitHub token for every job, so run them only on machines you trust. See [Run workflows from webhooks](/docs/guides/server/#security).
+
 ## The cache server
 
 Anyone with the cache URL, which contains the token, can read and write every repository's cache on that server. Keep it on a private network or behind TLS, and change the token with `--token` if it leaks.

@@ -114,3 +114,50 @@ Free disk used by the agent. Run it while the agent is stopped.
 | `--runners` | off | Delete runner installs and downloads entirely |
 | `--docker` | off | Also prune Docker objects older than `--docker-age`, on the whole Docker host |
 | `--docker-age` | `72h` | Age for `--docker` |
+
+## `selfaction server`
+
+Take GitHub webhooks and queue the workflows they trigger for workers. See [Run workflows from webhooks](/docs/guides/server/).
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--addr` | `:8080` | Listen address |
+| `--external-url` | `http://<this machine's IP>:<port>` | Public base URL for the webhook, status links and the workers' cache |
+| `--webhook-secret` | | Required. Also `$SELFACTION_WEBHOOK_SECRET` |
+| `--worker-token` | generated, kept in `<home>/server/worker-token` | Token workers authenticate with. Also `$SELFACTION_WORKER_TOKEN` |
+| `--github-token` | | GitHub token |
+| `--token-file` | | Read the GitHub token from this file |
+| `--github-api` | `https://api.github.com` | API base; for GitHub Enterprise Server, `https://<host>/api/v3` |
+| `--workflows` | `.github/workflows` | Workflow directory in each repository |
+| `--allow-forks` | off | Run pull requests from forks |
+| `--no-cache` | off | Don't serve `actions/cache` to workers |
+| `--ttl` | `168h` | Cache: evict entries unused for this long; `0` never |
+| `--max-repo-size` | `10GB` | Cache: per-repository cap, least recently used evicted first; `0` none |
+| `--max-total-size` | `0` | Cache: whole-store cap; `0` none |
+
+Without `--github-token` or `--token-file`, the server uses `$SELFACTION_GITHUB_TOKEN`, then `$GITHUB_TOKEN`, then your GitHub CLI login. Its data lives in `<home>/server`.
+
+### `server jobs`
+
+List the latest 100 jobs. Takes `--server`, default `http://localhost:8080`, and `--token`, the worker token, which defaults to `$SELFACTION_WORKER_TOKEN`, then `<home>/server/worker-token`.
+
+### `server cancel <job id>...`
+
+Cancel queued or running jobs. Takes the same flags as `server jobs`.
+
+## `selfaction worker`
+
+Claim jobs from a server and run them with the act engine. See [Run workflows from webhooks](/docs/guides/server/#workers-and-labels).
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--server` | | Server base URL. Required |
+| `--token` | `$SELFACTION_WORKER_TOKEN`, then `<home>/server/worker-token` | The server's worker token |
+| `--name` | this machine's host name | Worker name; slot n reports as `<name>-<n>` |
+| `-n`, `--slots` | `1` | Concurrent jobs |
+| `-l`, `--labels` | | Extra `runs-on` labels, comma separated |
+| `-P`, `--platform` | | `label=image` for `runs-on`, which also serves the label; image `-self-hosted` runs on this machine. Repeatable |
+| `--container-architecture` | | Job container platform, such as `linux/amd64` |
+| `--job-timeout` | `6h` | Cancel a job that runs longer |
+
+Workspaces, the fallback cache and artifacts live in `<home>/worker`.

@@ -1,0 +1,147 @@
+---
+title: Run workflows from webhooks
+description: Run workflows on your own workers with selfaction server and selfaction worker, without GitHub's runner service.
+sidebar:
+  order: 4
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+With [`selfaction agent`](/docs/guides/runner-agent/), GitHub still schedules every job and runs it with its own runner software. Server mode leaves GitHub Actions out entirely. GitHub only sends webhooks. `selfaction server` turns them into a job queue, `selfaction worker` runs the jobs with the act engine (the same one as [`selfaction run`](/docs/guides/run-locally/)), and the results come back as commit statuses that link to a live log on your server.
+
+## How it works
+
+<Steps>
+
+1. GitHub sends a `push` or `pull_request` webhook to `<server>/webhooks/github`. The server checks its signature against your webhook secret and answers at once.
+
+2. The server reads the workflow files at that commit through the GitHub API and applies the same trigger rules GitHub does: `branches`, `tags`, `paths` and their `-ignore` forms, and the `types` of a pull request (by default `opened`, `synchronize` and `reopened`). Each workflow the event triggers becomes one queued job, and the commit gets a pending status.
+
+3. A worker that serves every `runs-on` label in the workflow claims the job, makes a shallow clone of exactly that commit, and runs the workflow with the webhook payload as `github.event`. Its output reaches the server every two seconds.
+
+4. The server sets the commit status to success or failure. The status links to the job's page, which shows the log as it arrives.
+
+</Steps>
+
+A job is a whole workflow: all of its jobs run on the worker that claimed it, in dependency order, as `selfaction run` would run them. The commit shows one status per workflow, named `selfaction/<workflow> (<event>)`.
+
+## Set it up
+
+<Steps>
+
+1. Start the server with a webhook secret and the address GitHub can reach it at:
+
+   ```sh
+   export SELFACTION_WEBHOOK_SECRET=$(openssl rand -hex 32)
+   selfaction server --external-url https://ci.example.com
+   ```
+
+   ```txt
+   server on :8080 (store /home/you/.selfaction/server), workflows from .github/workflows
+   webhook: https://ci.example.com/webhooks/github (content type application/json, events push and pull_request)
+   start workers with: selfaction worker --server https://ci.example.com --token "$(cat /home/you/.selfaction/server/worker-token)"
+   ```
+
+   The worker token is generated on first start. The server uses your GitHub CLI login, or a token from `--github-token`, `--token-file`, `$SELFACTION_GITHUB_TOKEN` or `$GITHUB_TOKEN`. See [Tokens](#tokens) for what it needs.
+
+2. Start a worker on each machine that should run jobs:
+
+   ```sh
+   selfaction worker --server https://ci.example.com --token <worker token> --slots 2
+   ```
+
+   On the server's own machine, `--token` can be left out: the worker reads the token file.
+
+3. Add a webhook to the repository with the same secret:
+
+   ```sh
+   gh api repos/you/app/hooks -f name=web -F active=true \
+     -f 'events[]=push' -f 'events[]=pull_request' \
+     -f config[url]=https://ci.example.com/webhooks/github \
+     -f config[content_type]=json -f config[secret]="$SELFACTION_WEBHOOK_SECRET"
+   ```
+
+   GitHub sends a `ping` right away; the webhook's Recent Deliveries tab shows whether it got through. An organization webhook (`orgs/<org>/hooks`) covers every repository in the organization.
+
+4. Push a commit. The commit page shows `selfaction/<workflow> (push)` going from Queued to Running to Passed.
+
+</Steps>
+
+<Aside>
+If GitHub Actions also runs the repository, every workflow would run twice. Keep server-mode workflows in their own directory and start the server with `--workflows .selfaction/workflows`.
+</Aside>
+
+### Without a public address
+
+GitHub has to reach the server. For a try-out on a laptop, a Cloudflare quick tunnel gives it a temporary public URL:
+
+```sh
+cloudflared tunnel --url http://localhost:8080
+```
+
+Use the `https://<random>.trycloudflare.com` address it prints as `--external-url`, and delete the webhook when you stop the tunnel.
+
+If you keep a `~/.cloudflared/config.yml` for a named tunnel, the quick tunnel picks up its settings and answers every request with 404. Give it an empty config instead:
+
+```sh
+touch /tmp/empty.yml
+cloudflared --config /tmp/empty.yml tunnel --url http://localhost:8080
+```
+
+Without `--external-url`, the server uses this machine's network address. Workers on your network and their job containers can reach it, but status links only open on that network.
+
+## Workers and labels
+
+A worker serves the `runs-on` labels of its built-in platforms (`ubuntu-latest`, `ubuntu-24.04`, `ubuntu-22.04`, `ubuntu-20.04`, `self-hosted`, and `macos-*` on a Mac), every label you map with `-P`, and anything in `--labels`:
+
+```sh
+selfaction worker --server https://ci.example.com -P ubuntu-latest=catthehacker/ubuntu:full-latest --labels gpu
+```
+
+`ubuntu-*` jobs run in Docker containers. `self-hosted` and `macos-*` jobs run directly on the worker's machine. Each slot runs one job at a time and deletes its workspace afterwards. A job that runs longer than `--job-timeout` (6 hours, GitHub's limit) is cancelled.
+
+When a worker stops sending output for 3 minutes, the server fails its job with "The worker stopped responding". Stopping a worker with Ctrl-C cancels its running jobs and reports them as cancelled.
+
+## Shared cache
+
+The server also serves the `actions/cache` API under `/cache/`, and hands its address to every worker. A cache saved by a job on one worker is restored by the next job on any worker. It uses the same store and retention flags (`--ttl`, `--max-repo-size`, `--max-total-size`) as [`cache serve`](/docs/guides/cache-server/), kept in `<home>/server/cache`. Turn it off with `--no-cache`; workers then fall back to a local cache each.
+
+Job containers download caches from `--external-url`, so that address has to be reachable from the workers' machines.
+
+## Watch and cancel jobs
+
+```sh
+selfaction server jobs              # the latest 100 jobs
+selfaction server cancel <job id>   # a running job stops within seconds
+```
+
+Both take `--server` (default `http://localhost:8080`) and `--token`, the worker token. They call the worker API, which you can also use directly:
+
+```sh
+curl -H "Authorization: Bearer $TOKEN" https://ci.example.com/api/v1/jobs
+curl -X POST -H "Authorization: Bearer $TOKEN" https://ci.example.com/api/v1/jobs/<id>/cancel
+```
+
+## Differences from GitHub Actions
+
+- Only `push` and `pull_request` start jobs. `workflow_dispatch`, `schedule` and other events are ignored.
+- A pull request job runs the head commit of the pull request, not the merge commit GitHub creates.
+- Jobs get one secret, `GITHUB_TOKEN`, which is the server's GitHub token. Repository secrets and variables are not available.
+- Results are commit statuses, not check runs, so they have no annotations or job summaries.
+
+## Security
+
+- **Fork pull requests are skipped.** Their code would run on your workers with your token. Pass `--allow-forks` only for private repositories, or when you trust everyone who can open a pull request.
+- **The webhook secret is required.** The server refuses to start without one, and deliveries without a valid signature are rejected, so nobody else can queue jobs.
+- **Workers hold the server's GitHub token.** They use it to clone and pass it to jobs as `GITHUB_TOKEN`, so run workers only on machines you trust, and give the token no more access than your workflows need.
+- **Job pages are public but unguessable.** Each job id is 96 random bits, so a log can only be opened through the commit status that links to it. Don't print secrets in workflow output.
+- **The worker token** lets its holder claim jobs, read their tokens and cancel them. It is kept in `<home>/server/worker-token` with permissions `0600`.
+
+## Tokens
+
+The server's token needs to read the repository's contents, read pull requests and write commit statuses:
+
+| Token | Permissions |
+| --- | --- |
+| Fine-grained | Contents: read, Pull requests: read, Commit statuses: write. Add what your workflows do with `GITHUB_TOKEN`, such as Contents: write to push |
+| Classic | `repo`, or `public_repo` for public repositories only |
