@@ -1,0 +1,5 @@
+# Labels of the selfaction agents this repository's workflows target.
+self-hosted-runner:
+  labels:
+    - selfaction-local
+    - selfaction-docker
