@@ -7,16 +7,17 @@
 @import 'tailwindcss/utilities.css' layer(utilities);
 
 /*
- * Palette: cool fog paper, navy ink, and the amber of a job in progress.
+ * Palette: pure black with neutral grays in dark mode, cool fog paper and navy
+ * ink in light mode, and the amber of a job in progress in both.
  * Green and red are reserved for pass and fail.
  * Starlight sets data-theme on <html>; dark is its default.
  */
 :root {
-	--sa-paper: #0d1628;
-	--sa-panel: #131f36;
-	--sa-ink: #e6ebf2;
-	--sa-ink-soft: #9fb0c8;
-	--sa-rule: #26344f;
+	--sa-paper: #000000;
+	--sa-panel: #0a0a0a;
+	--sa-ink: #ededed;
+	--sa-ink-soft: #a1a1a1;
+	--sa-rule: #262626;
 	--sa-signal: #f5b331;
 	--sa-pass: #46c486;
 	--sa-fail: #f07261;
@@ -59,6 +60,25 @@
 	--color-gray-800: var(--color-slate-800);
 	--color-gray-900: var(--color-slate-900);
 	--color-gray-950: var(--color-slate-950);
+}
+
+/*
+ * Dark docs pages on the same black: Starlight's grays come from Tailwind's slate
+ * scale, which is tinted navy. Unlayered, so it wins over starlight-tailwind.
+ */
+:root:not([data-theme='light']) {
+	--sl-color-white: #ffffff;
+	--sl-color-gray-1: var(--color-neutral-200);
+	--sl-color-gray-2: var(--color-neutral-300);
+	--sl-color-gray-3: var(--color-neutral-400);
+	--sl-color-gray-4: var(--color-neutral-600);
+	--sl-color-gray-5: var(--color-neutral-800);
+	--sl-color-gray-6: var(--color-neutral-900);
+	--sl-color-black: #000000;
+	--sl-color-bg-nav: #000000;
+	--sl-color-bg-sidebar: #000000;
+	--sl-color-hairline: var(--sa-rule);
+	--sl-color-hairline-light: var(--sa-rule);
 }
 
 /* Theme-aware brand colors as utilities: bg-paper, text-ink, border-rule, text-signal… */
