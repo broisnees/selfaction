@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -49,6 +50,7 @@ type Options struct {
 	NoCache     bool
 	ArtifactDir string
 	CachePolicy cache.Policy
+	Log         io.Writer // job output goes here as plain lines instead of to the terminal; must be safe for concurrent writes
 }
 
 // DefaultPlatforms are the "medium" catthehacker images act recommends: small
@@ -182,6 +184,9 @@ func Run(ctx context.Context, o Options) error {
 	if err != nil {
 		return err
 	}
+	if o.Log != nil {
+		ctx = runner.WithJobLoggerFactory(ctx, plainLogs{o.Log})
+	}
 	return r.NewPlanExecutor(plan)(ctx)
 }
 
@@ -269,4 +274,28 @@ func printPlan(plan *model.Plan) error {
 		}
 	}
 	return w.Flush()
+}
+
+// plainLogs gives every act job a logger that writes uncoloured lines to w.
+// act still masks secrets in what these loggers print.
+type plainLogs struct{ w io.Writer }
+
+func (p plainLogs) WithJobLogger() *log.Logger {
+	l := log.New()
+	l.SetOutput(p.w)
+	l.SetLevel(log.InfoLevel)
+	l.SetFormatter(lineFormatter{})
+	return l
+}
+
+// lineFormatter prints "[job] message", and step output as "[job]   | line",
+// matching act's terminal output without the colours.
+type lineFormatter struct{}
+
+func (lineFormatter) Format(e *log.Entry) ([]byte, error) {
+	msg := strings.TrimSuffix(e.Message, "\n")
+	if e.Data["raw_output"] == true {
+		return fmt.Appendf(nil, "[%v]   | %s\n", e.Data["job"], msg), nil
+	}
+	return fmt.Appendf(nil, "[%v] %s\n", e.Data["job"], msg), nil
 }
