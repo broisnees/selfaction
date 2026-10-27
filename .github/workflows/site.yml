@@ -1,0 +1,36 @@
+# Builds the website on a selfaction runner and deploys it to Cloudflare Workers.
+# Deploying needs a CLOUDFLARE_API_TOKEN secret (Cloudflare's "Edit Cloudflare
+# Workers" token template) and a CLOUDFLARE_ACCOUNT_ID variable. Without the
+# token the site is still built, so broken pages fail the run, but not deployed.
+name: site
+on:
+  push:
+    branches: [main]
+    paths: ['site/**', '.github/workflows/site.yml']
+  workflow_dispatch:
+concurrency:
+  group: site-deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: [self-hosted, selfaction-local]
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npm run build
+      - name: Deploy to Cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::notice::CLOUDFLARE_API_TOKEN is not set, so the site was built but not deployed."
+            exit 0
+          fi
+          npx wrangler deploy
