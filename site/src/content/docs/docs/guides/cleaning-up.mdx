@@ -1,0 +1,79 @@
+---
+title: Clean up caches and runners
+description: Inspect and prune the cache store, free disk used by the agent, and clear GitHub's own caches.
+sidebar:
+  order: 5
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Most cleanup happens without you. Caches expire after a week unused and are capped per repository, and the agent wipes each slot after every job. These commands are for when you want space back now.
+
+## Caches
+
+List what is stored, newest use first within each repository:
+
+```sh
+selfaction cache ls
+selfaction cache ls --repo you/app --key node-modules-
+```
+
+```txt
+ID  REPO     KEY                      SIZE   CREATED      LAST USED
+2   you.app  deps-Linux-e0e701b49347  266MB  2 hours ago  4 minutes ago
+1   you.app  deps-Linux-ae042401139c  257MB  3 days ago   2 days ago
+```
+
+Delete specific entries by id, or everything matching a filter:
+
+```sh
+selfaction cache rm 1 7
+selfaction cache prune --repo you/app --key node-modules- --dry-run   # preview
+selfaction cache prune --repo you/app --key node-modules-
+selfaction cache prune --unused-for 48h
+```
+
+`prune` refuses to run without a filter. To empty the store, say so explicitly with `--all`.
+
+Apply the retention limits right away, for example with a tighter cap than the server uses:
+
+```sh
+selfaction cache gc --max-total-size 50GB
+```
+
+All cache commands work on `~/.selfaction/cache` unless you pass `--dir`. They can run while `selfaction cache serve` is using the same store.
+
+## Agent disk use
+
+After each job the agent removes the workspace, the runner's diagnostics and the registration's credentials. Two things are kept on purpose, because they make the next job faster: the tool cache that `actions/setup-*` fills, and the slot's home directory with its language caches.
+
+Stop the agent first, then:
+
+```sh
+selfaction agent clean            # workspaces, diagnostics, leftover credentials (after a crash)
+selfaction agent clean --tools    # also tool caches and slot home directories
+selfaction agent clean --runners  # also the runner installs, downloaded again on next start
+```
+
+### Docker
+
+Job containers are removed when they finish, but images and build cache pile up. `--docker` adds a prune of stopped containers, unused networks, dangling images and build cache older than `--docker-age` (72 hours by default):
+
+```sh
+selfaction agent clean --docker --docker-age 24h
+```
+
+<Aside type="caution">
+`--docker` prunes the whole Docker host, including objects that have nothing to do with CI.
+</Aside>
+
+## GitHub's own caches
+
+Jobs on GitHub's runner store caches with GitHub, not with selfaction. List and delete them with the GitHub CLI:
+
+```sh
+gh cache list --repo you/app
+gh cache delete --all --repo you/app
+```
+
+On a self-hosted runner, consider `cache: false` for `actions/setup-go` and similar actions. The machine keeps its caches between jobs, so a remote cache only adds an upload and a download.
