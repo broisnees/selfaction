@@ -1,0 +1,111 @@
+---
+// Overrides Starlight's Hero. Only the landing page sets `hero`, so this is its first screen.
+import { Code } from '@astrojs/starlight/components';
+import { hero, runUrl } from '../data/runs';
+
+const { hosted, local } = hero;
+const duration = (s: number) => (s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`);
+---
+
+<section class="not-content grid grid-cols-1 items-start gap-12 pb-8 pt-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)] lg:pt-10">
+	<div class="min-w-0 max-w-xl">
+		<h1 class="text-[2.6rem] font-extrabold leading-[1.02] tracking-[-0.035em] text-ink sm:text-6xl">
+			Run GitHub Actions on machines you own.
+		</h1>
+		<p class="mt-6 text-lg leading-relaxed text-ink-soft">
+			selfaction turns your laptop, a server or any Docker host into runners for the workflows you already have. It
+			also runs them locally before you push, and keeps a dependency cache that survives between runs.
+		</p>
+		<div class="mt-8 flex flex-wrap gap-3">
+			<a
+				href="/docs/guides/install/"
+				class="rounded-md bg-signal px-5 py-2.5 font-semibold text-[#0e1a33] no-underline hover:brightness-105"
+			>
+				Install selfaction
+			</a>
+			<a
+				href="/demo/"
+				class="rounded-md border border-rule px-5 py-2.5 font-semibold text-ink no-underline hover:border-ink-soft"
+			>
+				See the real runs
+			</a>
+		</div>
+		<div class="mt-8">
+			<Code code="go install github.com/broisnischal/selfaction@latest" lang="sh" frame="none" />
+		</div>
+	</div>
+
+	<figure class="m-0 min-w-0 overflow-hidden rounded-xl border border-rule bg-panel shadow-[0_1px_0_var(--sa-rule),0_24px_48px_-24px_rgb(14_26_51/0.35)]">
+		<figcaption class="border-b border-rule px-5 py-3 text-sm text-ink-soft">
+			One push to <code class="text-ink">main</code>, commit{' '}
+			<code class="text-ink">{hero.commit}</code>. Two places to run it.
+		</figcaption>
+
+		<div class="border-b border-rule px-5 py-4">
+			<a href={runUrl(hosted.run)} class="flex items-center gap-2.5 text-sm font-semibold text-ink no-underline hover:underline">
+				<span class="size-2.5 shrink-0 rounded-full bg-fail" aria-hidden="true"></span>
+				{hosted.where}
+			</a>
+			<p class="mt-2 font-mono text-[0.78rem] leading-relaxed text-fail">
+				<span aria-hidden="true">✕ </span>{hosted.message}
+			</p>
+		</div>
+
+		<div class="px-5 py-4" style={`--n: ${local.steps.length}`}>
+			<a href={runUrl(local.run)} class="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm font-semibold text-ink no-underline hover:underline">
+				<span class="dot size-2.5 shrink-0 rounded-full" aria-hidden="true"></span>
+				{local.runner}
+				<span class="font-normal text-ink-soft">{local.where}</span>
+			</a>
+			<ol class="mt-3 list-none space-y-1.5 p-0 font-mono text-[0.78rem]" aria-label="Job steps">
+				{
+					local.steps.map((s, i) => (
+						<li class="step flex justify-between gap-4" style={`--i: ${i}`}>
+							<span class="text-ink">
+								<span class="text-pass" aria-hidden="true">✓ </span>
+								{s.name}
+							</span>
+							<span class="tabular-nums text-ink-soft">{duration(s.seconds)}</span>
+						</li>
+					))
+				}
+			</ol>
+			<p class="step done mt-4 border-t border-rule pt-3 text-sm font-semibold text-pass" style={`--i: ${local.steps.length}`}>
+				Job succeeded in {duration(local.total)}
+			</p>
+		</div>
+	</figure>
+</section>
+
+<style>
+	/* The page's single orchestrated moment: the self-hosted job plays back once. */
+	.step {
+		animation: step-in 0.3s ease-out both;
+		animation-delay: calc(var(--i) * 260ms + 500ms);
+	}
+	.dot {
+		background-color: var(--sa-signal);
+		animation: finish 0.2s ease-out forwards;
+		animation-delay: calc(var(--n) * 260ms + 500ms);
+	}
+	@keyframes step-in {
+		from {
+			opacity: 0;
+			transform: translateY(3px);
+		}
+	}
+	@keyframes finish {
+		to {
+			background-color: var(--sa-pass);
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.step,
+		.dot {
+			animation: none;
+		}
+		.dot {
+			background-color: var(--sa-pass);
+		}
+	}
+</style>

@@ -10,7 +10,10 @@ export default defineConfig({
 		starlight({
 			title: 'selfaction',
 			description: 'Run GitHub Actions on machines you own: your laptop, a server or Docker.',
-			components: { SocialIcons: './src/components/HeaderLinks.astro' },
+			components: {
+				Hero: './src/components/Hero.astro',
+				SocialIcons: './src/components/HeaderLinks.astro',
+			},
 			social: [{ icon: 'github', label: 'GitHub', href: repo }],
 			customCss: ['./src/styles/global.css'],
 			editLink: { baseUrl: `${repo}/edit/main/site/` },
