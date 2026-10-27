@@ -7,8 +7,8 @@ import (
 	"github.com/nektos/act/pkg/common"
 	"github.com/spf13/cobra"
 
-	"github.com/broisnischal/selfaction/internal/cache"
-	"github.com/broisnischal/selfaction/internal/run"
+	"github.com/broisnees/selfaction/internal/cache"
+	"github.com/broisnees/selfaction/internal/run"
 )
 
 func runCmd() *cobra.Command {

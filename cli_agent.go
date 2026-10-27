@@ -15,7 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
-	"github.com/broisnischal/selfaction/internal/agent"
+	"github.com/broisnees/selfaction/internal/agent"
 )
 
 func agentCmd() *cobra.Command {

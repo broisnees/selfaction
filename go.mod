@@ -1,4 +1,4 @@
-module github.com/broisnischal/selfaction
+module github.com/broisnees/selfaction
 
 go 1.26.0
 

@@ -17,7 +17,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
-	"github.com/broisnischal/selfaction/internal/cache"
+	"github.com/broisnees/selfaction/internal/cache"
 )
 
 var version = "dev"

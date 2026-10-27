@@ -26,7 +26,7 @@ import (
 	"github.com/nektos/act/pkg/runner"
 	log "github.com/sirupsen/logrus"
 
-	"github.com/broisnischal/selfaction/internal/cache"
+	"github.com/broisnees/selfaction/internal/cache"
 )
 
 type Options struct {
