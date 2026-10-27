@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"github.com/sirupsen/logrus/hooks/test"
 
 	"github.com/broisnees/selfaction/internal/github"
 	"github.com/broisnees/selfaction/internal/run"
@@ -71,9 +72,10 @@ func TestWorkerRunsClaimedJobs(t *testing.T) {
 	ok, broken, slow := enqueue("ok"), enqueue("broken"), enqueue("slow")
 
 	started := make(chan struct{})
+	logger, logs := test.NewNullLogger()
 	w := &Worker{
 		Server: api.URL, Token: "wt", Name: "box", Labels: []string{"ubuntu-latest", "self-hosted"}, Slots: 3,
-		Dir: t.TempDir(), Log: logrus.New(),
+		Dir: t.TempDir(), Log: logger,
 		Execute: func(ctx context.Context, o run.Options) error {
 			switch filepath.Base(o.Workflows) {
 			case "ok.yml":
@@ -128,5 +130,26 @@ func TestWorkerRunsClaimedJobs(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Errorf("workspaces left behind: %v", entries)
+	}
+
+	// The server already ended the cancelled job, so the worker must not report it again.
+	slowDone := func() bool {
+		for _, e := range logs.AllEntries() {
+			if strings.Contains(e.Message, "job "+slow.ID+" "+server.Cancelled) {
+				return true
+			}
+		}
+		return false
+	}
+	for deadline := time.Now().Add(5 * time.Second); !slowDone() && time.Now().Before(deadline); {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !slowDone() {
+		t.Fatal("the worker never finished the cancelled job")
+	}
+	for _, e := range logs.AllEntries() {
+		if e.Level <= logrus.WarnLevel {
+			t.Errorf("worker logged %s: %s", e.Level, e.Message)
+		}
 	}
 }

@@ -149,11 +149,15 @@ func (w *Worker) work(ctx context.Context, name string, c *server.Claim) {
 		w.Log.Warnf("%s: send the end of job %s's log: %v", name, j.ID, err)
 	}
 
-	body, _ := json.Marshal(map[string]string{"worker": name, "result": result})
-	if res, err := w.post(ctx, "/api/v1/jobs/"+j.ID+"/finish", "application/json", body); err != nil {
-		w.Log.Errorf("%s: report result of job %s: %v", name, j.ID, err)
-	} else {
-		res.Body.Close()
+	select {
+	case <-cancelled: // the server already ended the job; finishing it again only gets a 409
+	default:
+		body, _ := json.Marshal(map[string]string{"worker": name, "result": result})
+		if res, err := w.post(ctx, "/api/v1/jobs/"+j.ID+"/finish", "application/json", body); err != nil {
+			w.Log.Errorf("%s: report result of job %s: %v", name, j.ID, err)
+		} else {
+			res.Body.Close()
+		}
 	}
 	w.Log.Infof("%s: job %s %s", name, j.ID, result)
 }
