@@ -1,0 +1,40 @@
+---
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { posts, formatDate, minutes } from '../../lib/blog';
+
+const all = await posts();
+---
+
+<StarlightPage
+	frontmatter={{
+		title: 'Blog',
+		description: 'How selfaction was built, and what broke along the way.',
+		template: 'splash',
+	}}
+>
+	<p class="not-content max-w-2xl text-lg text-ink-soft">
+		How selfaction was built, and what broke along the way. Every number in these posts comes from a real run you can
+		open on GitHub.
+	</p>
+	<ol class="not-content mt-10 list-none divide-y divide-rule border-y border-rule p-0">
+		{
+			all.map((p) => (
+				<li class="grid gap-x-10 gap-y-2 py-7 md:grid-cols-[11rem_minmax(0,1fr)]">
+					<p class="m-0 text-sm text-ink-soft">
+						<time datetime={p.data.date.toISOString()}>{formatDate(p.data.date)}</time>
+						<br />
+						{minutes(p.body)} minute read
+					</p>
+					<div>
+						<h2 class="m-0 text-2xl font-bold tracking-[-0.015em]">
+							<a href={`/blog/${p.id}/`} class="text-ink no-underline decoration-signal decoration-2 underline-offset-4 hover:underline">
+								{p.data.title}
+							</a>
+						</h2>
+						<p class="mt-2 max-w-2xl leading-relaxed text-ink-soft">{p.data.description}</p>
+					</div>
+				</li>
+			))
+		}
+	</ol>
+</StarlightPage>
