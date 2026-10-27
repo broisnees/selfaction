@@ -39,6 +39,7 @@ type Config struct {
 	RunnerVersion string   // actions/runner version for host mode; "" = latest
 	Image         string   // runner image for docker mode
 	DockerSocket  bool     // docker mode: give jobs the host Docker daemon (container jobs, services, docker build)
+	ShareHome     bool     // host mode: run jobs with this user's HOME instead of a per-slot one
 }
 
 type Agent struct {
@@ -118,6 +119,7 @@ func (a *Agent) runJob(ctx context.Context, n int) error {
 	}()
 
 	var cmd *exec.Cmd
+	env := os.Environ()
 	if a.Mode == "docker" {
 		args := []string{"run", "--rm", "--name", name, "--label", "dev.selfaction.agent=1", "-e", "ACTIONS_RUNNER_INPUT_JITCONFIG", "-e", "RUNNER_MANUALLY_TRAP_SIG"}
 		if a.DockerSocket {
@@ -129,13 +131,14 @@ func (a *Agent) runJob(ctx context.Context, n int) error {
 		defer cleanSlot(dir, false)
 		cmd = exec.CommandContext(ctx, filepath.Join(dir, "run.sh"))
 		cmd.Dir = dir
+		env = a.hostEnv(env, dir)
 	}
 	// The runner reads ACTIONS_RUNNER_INPUT_* and scrubs it from its environment,
 	// which keeps the credential out of `ps` output, unlike --jitconfig.
 	// RUNNER_MANUALLY_TRAP_SIG makes run.sh forward SIGINT to the listener; by
 	// default bash sits in `wait` and the listener never sees it (and as PID 1
 	// in a container, run.sh would ignore it outright).
-	cmd.Env = append(os.Environ(), "ACTIONS_RUNNER_INPUT_JITCONFIG="+jit.Config, "RUNNER_MANUALLY_TRAP_SIG=1")
+	cmd.Env = append(env, "ACTIONS_RUNNER_INPUT_JITCONFIG="+jit.Config, "RUNNER_MANUALLY_TRAP_SIG=1")
 	out := &lineLogger{log: a.Log.WithField("runner", name)}
 	cmd.Stdout, cmd.Stderr = out, out
 	// On shutdown let the runner cancel its job and report back before killing it.
@@ -147,6 +150,25 @@ func (a *Agent) runJob(ctx context.Context, n int) error {
 		return fmt.Errorf("%s: %w", name, err)
 	}
 	return nil
+}
+
+// hostEnv gives host-mode jobs a persistent per-slot HOME. Without it a job
+// runs as you: actions/setup-go caches your whole ~/go/pkg/mod, npm and pip use
+// your caches, and your dotfiles and SSH keys are one `cat` away. Docker keeps
+// working because DOCKER_CONFIG still points at your contexts and logins.
+func (a *Agent) hostEnv(env []string, dir string) []string {
+	if a.ShareHome {
+		return env
+	}
+	home := filepath.Join(dir, "_home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		a.Log.Warnf("slot home %s: %v; jobs will use your HOME", home, err)
+		return env
+	}
+	if real, err := os.UserHomeDir(); err == nil && os.Getenv("DOCKER_CONFIG") == "" {
+		env = append(env, "DOCKER_CONFIG="+filepath.Join(real, ".docker"))
+	}
+	return append(env, "HOME="+home) // exec uses the last value of a duplicated key
 }
 
 func (a *Agent) defaultLabels() []string {
@@ -329,7 +351,7 @@ func removeExcept(dir, keep string) {
 
 // cleanSlot wipes a slot after a job: workspace, diagnostics and the JIT
 // credentials the runner wrote. The tool cache (_work/_tool, used by
-// actions/setup-*) survives unless tools is set.
+// actions/setup-*) and the slot's HOME (language caches) survive unless tools is set.
 func cleanSlot(dir string, tools bool) {
 	work := filepath.Join(dir, "_work")
 	entries, _ := os.ReadDir(work)
@@ -337,6 +359,9 @@ func cleanSlot(dir string, tools bool) {
 		if tools || e.Name() != "_tool" {
 			os.RemoveAll(filepath.Join(work, e.Name()))
 		}
+	}
+	if tools {
+		os.RemoveAll(filepath.Join(dir, "_home"))
 	}
 	os.RemoveAll(filepath.Join(dir, "_diag"))
 	for _, f := range []string{".runner", ".credentials", ".credentials_rsaparams"} {

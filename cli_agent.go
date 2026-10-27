@@ -56,6 +56,7 @@ func (a *agentFlags) bind(f *pflag.FlagSet) {
 	f.StringVar(&a.cfg.RunnerVersion, "runner-version", "", "actions/runner version for host mode (default latest)")
 	f.StringVar(&a.cfg.Image, "image", "ghcr.io/actions/actions-runner:latest", "runner image for docker mode")
 	f.BoolVar(&a.cfg.DockerSocket, "docker-socket", false, "docker mode: mount the host Docker socket so jobs can use container:, services: and docker build (gives jobs root on the Docker host)")
+	f.BoolVar(&a.cfg.ShareHome, "share-home", false, "host mode: run jobs with your own HOME, sharing your caches, dotfiles and credentials with them (default: a per-slot HOME)")
 	f.StringVar(&a.token, "token", "", "GitHub token")
 	f.StringVar(&a.tokenFile, "token-file", "", "read the GitHub token from this file")
 	f.StringVar(&a.api, "github-api", "https://api.github.com", "GitHub API base; for GitHub Enterprise Server use https://<host>/api/v3")
@@ -228,7 +229,7 @@ already does this after every job; use it after a crash or to reclaim more space
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&tools, "tools", false, "also delete the tool cache used by actions/setup-* (re-downloaded on next use)")
+	cmd.Flags().BoolVar(&tools, "tools", false, "also delete tool caches and per-slot home directories (re-downloaded on next use)")
 	cmd.Flags().BoolVar(&runners, "runners", false, "delete the runner installs and downloads entirely (re-downloaded on next start)")
 	cmd.Flags().BoolVar(&docker, "docker", false, "also prune Docker: stopped containers, unused networks, dangling images and build cache older than --docker-age. Affects the whole Docker host, not just CI")
 	cmd.Flags().DurationVar(&dockerAge, "docker-age", 72*time.Hour, "only prune Docker objects older than this")
