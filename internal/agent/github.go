@@ -59,6 +59,19 @@ func (g *GitHub) DeleteRunner(ctx context.Context, target string, id int64) erro
 	return err
 }
 
+// RunnerStatus reports "online" or "offline" for a registration, or "gone"
+// when GitHub no longer knows it.
+func (g *GitHub) RunnerStatus(ctx context.Context, target string, id int64) (string, error) {
+	var res struct {
+		Status string `json:"status"`
+	}
+	err := g.do(ctx, "GET", fmt.Sprintf("%s%s/actions/runners/%d", g.API, targetPath(target), id), nil, &res)
+	if se, ok := err.(*statusError); ok && se.code == http.StatusNotFound {
+		return "gone", nil
+	}
+	return res.Status, err
+}
+
 // Release is an actions/runner release; SHA256 maps "osx-arm64" style
 // platforms to the tarball checksum published in the release notes.
 type Release struct {

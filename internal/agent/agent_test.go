@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/sirupsen/logrus"
 )
@@ -24,6 +26,7 @@ type fakeGitHub struct {
 	mu      sync.Mutex
 	created []map[string]any
 	deleted []string
+	status  string // what GET runner reports; "" = online
 }
 
 func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -43,6 +46,12 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == "DELETE" && strings.HasPrefix(r.URL.Path, "/repos/octo/app/actions/runners/"):
 		f.deleted = append(f.deleted, r.URL.Path)
 		http.Error(w, `{"message":"Not Found"}`, 404) // already removed itself: must not be an error
+	case r.Method == "GET" && r.URL.Path == "/repos/octo/app/actions/runners/42":
+		status := f.status
+		if status == "" {
+			status = "online"
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 42, "status": status})
 	default:
 		http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, 500)
 	}
@@ -178,5 +187,36 @@ func TestLineLoggerDemotesRunnerDiagnostics(t *testing.T) {
 	_, _ = l.Write([]byte("ted to GitHub\n\n"))
 	if out := buf.String(); strings.Contains(out, "[RUNNER") || !strings.Contains(out, `msg="√ Connected to GitHub"`) {
 		t.Fatalf("got:\n%s", out)
+	}
+}
+
+// TestRunJobRestartsOfflineRunner covers a runner whose process is alive but
+// which GitHub sees as offline (a stale connection after sleep): the agent
+// must stop it instead of waiting forever.
+func TestRunJobRestartsOfflineRunner(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("host mode uses run.sh")
+	}
+	gh := &fakeGitHub{status: "offline"}
+	srv := httptest.NewServer(gh)
+	defer srv.Close()
+	a := &Agent{
+		Config:      Config{Target: "octo/app", Name: "box", Mode: "host", Dir: t.TempDir()},
+		GitHub:      &GitHub{API: srv.URL, Token: "tkn"},
+		Log:         logrus.New(),
+		version:     "2.0.0",
+		healthEvery: 20 * time.Millisecond,
+	}
+	dir := a.slotDir(1)
+	_ = os.MkdirAll(dir, 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "run.sh"), []byte("#!/bin/sh\nexec sleep 30\n"), 0o755)
+
+	start := time.Now()
+	err := a.runJob(context.Background(), 1)
+	if !errors.Is(err, errOffline) || time.Since(start) > 10*time.Second {
+		t.Fatalf("runJob = %v after %s; want errOffline quickly", err, time.Since(start))
+	}
+	if len(gh.deleted) != 1 {
+		t.Errorf("stale registration not removed: %v", gh.deleted)
 	}
 }

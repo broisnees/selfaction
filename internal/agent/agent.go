@@ -47,9 +47,12 @@ type Agent struct {
 	GitHub *GitHub
 	Log    logrus.FieldLogger
 
-	labels  []string
-	version string
+	labels      []string
+	version     string
+	healthEvery time.Duration // how often to ask GitHub whether a runner is online; 0 = 2m
 }
+
+var errOffline = errors.New("GitHub reported the runner offline; restarted it")
 
 // Run keeps Slots runners registered until ctx is cancelled, then
 // unregisters them.
@@ -118,6 +121,8 @@ func (a *Agent) runJob(ctx context.Context, n int) error {
 		}
 	}()
 
+	jobCtx, stop := context.WithCancelCause(ctx)
+	defer stop(nil)
 	var cmd *exec.Cmd
 	env := os.Environ()
 	if a.Mode == "docker" {
@@ -125,11 +130,11 @@ func (a *Agent) runJob(ctx context.Context, n int) error {
 		if a.DockerSocket {
 			args = append(args, "-v", "/var/run/docker.sock:/var/run/docker.sock")
 		}
-		cmd = exec.CommandContext(ctx, "docker", append(args, a.Image, "/home/runner/run.sh")...)
+		cmd = exec.CommandContext(jobCtx, "docker", append(args, a.Image, "/home/runner/run.sh")...)
 	} else {
 		dir := a.slotDir(n)
 		defer cleanSlot(dir, false)
-		cmd = exec.CommandContext(ctx, filepath.Join(dir, "run.sh"))
+		cmd = exec.CommandContext(jobCtx, filepath.Join(dir, "run.sh"))
 		cmd.Dir = dir
 		env = a.hostEnv(env, dir)
 	}
@@ -146,10 +151,49 @@ func (a *Agent) runJob(ctx context.Context, n int) error {
 	cmd.WaitDelay = 45 * time.Second
 
 	a.Log.Infof("%s: online, waiting for a job", name)
-	if err := cmd.Run(); err != nil && ctx.Err() == nil {
+	go a.watch(jobCtx, stop, name, jit.ID)
+	err = cmd.Run()
+	switch {
+	case ctx.Err() != nil:
+		return nil
+	case errors.Is(context.Cause(jobCtx), errOffline):
+		return fmt.Errorf("%s: %w", name, errOffline)
+	case err != nil:
 		return fmt.Errorf("%s: %w", name, err)
 	}
 	return nil
+}
+
+// watch stops a runner that GitHub has seen offline on two checks in a row,
+// so the slot registers a fresh one. That happens when the machine sleeps:
+// the listener's long poll goes stale but the process never exits.
+func (a *Agent) watch(ctx context.Context, stop context.CancelCauseFunc, name string, id int64) {
+	every := a.healthEvery
+	if every == 0 {
+		every = 2 * time.Minute
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	offline := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		status, err := a.GitHub.RunnerStatus(ctx, a.Target, id)
+		switch {
+		case err != nil: // an API hiccup says nothing about the runner
+		case status == "online":
+			offline = 0
+		default:
+			if offline++; offline >= 2 {
+				a.Log.Warnf("%s: GitHub reports it %s; restarting it", name, status)
+				stop(errOffline)
+				return
+			}
+		}
+	}
 }
 
 // hostEnv gives host-mode jobs a persistent per-slot HOME. Without it a job
