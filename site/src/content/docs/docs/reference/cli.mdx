@@ -1,0 +1,116 @@
+---
+title: Command line
+description: Every selfaction command and flag.
+sidebar:
+  order: 1
+---
+
+These flags work with every command:
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--home` | `~/.selfaction`, or `$SELFACTION_HOME` | Data directory |
+| `-v`, `--verbose` | off | Debug logging |
+| `--version` | | Print the version |
+
+## `selfaction run [event]`
+
+Run the repository's workflows locally in Docker. See [Run workflows locally](/docs/guides/run-locally/).
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `-C`, `--directory` | `.` | Repository root |
+| `-W`, `--workflows` | `.github/workflows` | Workflow file or directory |
+| `-j`, `--job` | | Run only this job id |
+| `-l`, `--list` | | List the jobs that would run |
+| `-e`, `--eventpath` | | Event payload JSON file |
+| `-P`, `--platform` | | `label=image` for `runs-on`; image `-self-hosted` runs on this machine. Repeatable |
+| `-s`, `--secret` | | `KEY=VALUE`, or `KEY` to read from the environment. Repeatable |
+| `--var` | | Configuration variable `KEY=VALUE`. Repeatable |
+| `--env` | | Environment variable `KEY=VALUE`. Repeatable |
+| `--matrix` | | Only run matrix combinations with `key:value`. Repeatable |
+| `--container-architecture` | | Job container platform, such as `linux/amd64` |
+| `--concurrency` | CPU count | Maximum parallel jobs |
+| `--pull` | off | Always pull job images |
+| `--cache-dir` | `<home>/cache` | Local cache store |
+| `--cache-url` | | Use a cache server, `http://host:port/<token>`, instead of the local store |
+| `--no-cache` | off | Disable `actions/cache` support |
+| `--artifacts` | on | Serve `actions/upload-artifact`, stored in `<home>/artifacts` |
+
+## `selfaction cache`
+
+All cache commands take `--dir`, the store directory, which defaults to `<home>/cache`.
+
+### `cache serve`
+
+Run a cache server. See [Share a cache server](/docs/guides/cache-server/).
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--addr` | `:7979` | Listen address |
+| `--token` | generated, kept in `<dir>/token` | Access token in cache URLs. Also `$SELFACTION_CACHE_TOKEN` |
+| `--external-url` | the host the job connected to | Public base URL for download links |
+| `--gc-interval` | `10m` | How often to apply the retention policy |
+| `--ttl` | `168h` | Evict entries unused for this long; `0` never |
+| `--max-repo-size` | `10GB` | Per-repository cap, least recently used evicted first; `0` none |
+| `--max-total-size` | `0` | Whole-store cap; `0` none |
+
+### `cache ls`
+
+List entries. Filters: `--repo owner/repo`, `--key prefix`, `--unused-for duration`.
+
+### `cache rm <id>...`
+
+Delete entries by id.
+
+### `cache prune`
+
+Delete entries matching the same filters as `ls`. Requires at least one filter, or `--all`. `--dry-run` shows what would be deleted.
+
+### `cache gc`
+
+Apply the retention policy now. Takes `--ttl`, `--max-repo-size` and `--max-total-size`, with the same defaults as `serve`.
+
+## `selfaction agent`
+
+### `agent start`
+
+Register runners and run jobs until stopped. See [Use your machine as a GitHub runner](/docs/guides/runner-agent/).
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--repo` | | Serve one repository, `owner/repo` |
+| `--org` | | Serve every repository in an organization |
+| `-l`, `--labels` | | Extra runner labels, comma separated |
+| `-n`, `--slots` | `1` | Concurrent jobs |
+| `--mode` | `host` | `host` runs jobs on this machine; `docker` runs each in a fresh runner container |
+| `--name` | this machine's host name | Runner name prefix |
+| `--runner-group` | `1` (Default) | Runner group id |
+| `--runner-version` | latest | `actions/runner` version for host mode |
+| `--share-home` | off | Host mode: run jobs with your own `HOME` |
+| `--image` | `ghcr.io/actions/actions-runner:latest` | Runner image for Docker mode |
+| `--docker-socket` | off | Docker mode: give jobs the host's Docker daemon |
+| `--token` | | GitHub token |
+| `--token-file` | | Read the GitHub token from this file |
+| `--github-api` | `https://api.github.com` | API base; for GitHub Enterprise Server, `https://<host>/api/v3` |
+
+Without `--token` or `--token-file`, the agent uses `$SELFACTION_GITHUB_TOKEN`, then `$GITHUB_TOKEN`, then your GitHub CLI login.
+
+### `agent install`
+
+Install `agent start`, with the same flags, as a service: launchd on macOS, `systemd --user` on Linux.
+
+### `agent uninstall`
+
+Stop and remove the service.
+
+### `agent clean`
+
+Free disk used by the agent. Run it while the agent is stopped.
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--tools` | off | Also delete tool caches and slot home directories |
+| `--runners` | off | Delete runner installs and downloads entirely |
+| `--docker` | off | Also prune Docker objects older than `--docker-age`, on the whole Docker host |
+| `--docker-age` | `72h` | Age for `--docker` |
