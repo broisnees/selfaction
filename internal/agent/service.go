@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const serviceLabel = "dev.selfaction.agent"
@@ -37,7 +38,15 @@ func Install(args []string, logFile string) (string, error) {
 			return "", err
 		}
 		domain := fmt.Sprintf("gui/%d", os.Getuid())
-		_ = exec.Command("launchctl", "bootout", domain+"/"+serviceLabel).Run()
+		target := domain + "/" + serviceLabel
+		_ = exec.Command("launchctl", "bootout", target).Run()
+		// bootout returns while a running agent is still letting its runners cancel
+		// their jobs; bootstrapping before it is gone fails with "Input/output error".
+		for deadline := time.Now().Add(90 * time.Second); time.Now().Before(deadline); time.Sleep(500 * time.Millisecond) {
+			if exec.Command("launchctl", "print", target).Run() != nil {
+				break
+			}
+		}
 		return path, run("launchctl", "bootstrap", domain, path)
 	}
 	if err := os.WriteFile(path, systemdUnit(argv), 0o600); err != nil {
