@@ -1,0 +1,57 @@
+---
+title: Security
+description: What a job can do on your machine, and how to keep self-hosted runners safe.
+sidebar:
+  order: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A workflow job runs whatever code is in the commit it was triggered for. On a self-hosted runner, that code runs on your hardware. Decide who can trigger jobs before you decide anything else.
+
+## What a job can reach
+
+| Mode | A job runs as | It can reach |
+| --- | --- | --- |
+| Host | Your user | Your files, your network, and anything your user can do. A per-slot home directory keeps caches and dotfiles apart, but it is not a sandbox. |
+| Docker | `runner` in a fresh container | The container, the network, and nothing from earlier jobs |
+| Docker with `--docker-socket` | `runner`, with the host's Docker daemon | The whole Docker host, which is equivalent to root on it |
+
+## Public repositories
+
+Anyone can fork a public repository and open a pull request. If a workflow that runs on `pull_request` targets your self-hosted runner, their code can run on your machine. Three habits keep that from happening:
+
+1. **Target self-hosted runners only from trusted events.** `push` to protected branches and `workflow_dispatch` can only be triggered by people with write access:
+
+   ```yaml
+   on:
+     push:
+       branches: [main]
+     workflow_dispatch:
+   jobs:
+     test:
+       runs-on: [self-hosted, my-mac]
+   ```
+
+2. **Require approval for outside contributors.** GitHub then holds every workflow run from a first-time or outside contributor until someone with write access approves it:
+
+   ```sh
+   gh api -X PUT repos/you/app/actions/permissions/fork-pr-contributor-approval \
+     -f approval_policy=all_external_contributors
+   ```
+
+3. **Use Docker mode, or a separate machine, for anything you would not run on your laptop yourself.**
+
+<Aside type="caution">
+Bots push branches too. Dependabot pushes a branch for every update it proposes, so `on: push` without a branch filter sends those commits to your runner.
+</Aside>
+
+## Credentials the agent handles
+
+- **Your GitHub token** is only used to create and delete runner registrations. If you install the agent as a service with an explicit token, it is stored in `~/.selfaction/agent/token` with permissions `0600`. A GitHub CLI login stays in the system keychain.
+- **Runner registrations** are single-use. Their credentials are passed through the environment rather than on the command line, and deleted from the slot after each job.
+- **The runner binary** is checked against the SHA-256 that GitHub publishes for each release before it is unpacked.
+
+## The cache server
+
+Anyone with the cache URL, which contains the token, can read and write every repository's cache on that server. Keep it on a private network or behind TLS, and change the token with `--token` if it leaks.
