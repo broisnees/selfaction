@@ -1,0 +1,26 @@
+# Runs on selfaction server mode, not on GitHub's runners:
+#   selfaction server --workflows .selfaction/workflows --external-url <url> --webhook-secret <secret>
+#   selfaction worker --server <url>
+# The commit shows it as the status "selfaction/ci (push)".
+name: ci
+on:
+  push:
+    paths-ignore: ['site/**']
+  pull_request:
+    paths-ignore: ['site/**']
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false # actions/cache below keeps the modules in the server's cache
+      - uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: go-mod-${{ hashFiles('go.sum') }}
+      - run: go vet ./...
+      - run: go test ./...
+      - run: go build -o bin/selfaction .
