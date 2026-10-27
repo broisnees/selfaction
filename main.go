@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -20,6 +21,13 @@ import (
 )
 
 var version = "dev"
+
+func init() {
+	// `go install …@version` builds carry their module version; release builds set it with -ldflags.
+	if bi, ok := debug.ReadBuildInfo(); ok && version == "dev" && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		version = bi.Main.Version
+	}
+}
 
 var (
 	homeDir string
