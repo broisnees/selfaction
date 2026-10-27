@@ -1,5 +1,59 @@
 ---
 import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { Code } from '@astrojs/starlight/components';
+
+const modes = [
+	{
+		command: 'selfaction run',
+		text: 'Try a workflow before you push it. Jobs run in Docker on this machine with the act engine, and actions/cache and artifacts work.',
+		example: 'selfaction run pull_request -j test',
+		href: '/docs/guides/run-locally/',
+	},
+	{
+		command: 'selfaction agent',
+		text: 'Let GitHub send jobs to this machine. It registers single-use runners and runs GitHub’s own runner, so logs and checks stay on GitHub.',
+		example: 'selfaction agent start --repo you/app',
+		href: '/docs/guides/runner-agent/',
+	},
+	{
+		command: 'selfaction cache',
+		text: 'Share one dependency cache across runs and machines. Each repository gets its own space, and old entries are cleaned up for you.',
+		example: 'selfaction cache serve',
+		href: '/docs/guides/cache-server/',
+	},
+];
+
+const lifecycle = [
+	{
+		title: 'Register',
+		text: 'The agent asks GitHub for a single-use runner registration and starts GitHub’s official runner with it. The runner connects out, so no ports are opened.',
+	},
+	{
+		title: 'Wait',
+		text: 'GitHub hands it the next job whose runs-on labels match: self-hosted, the OS, the CPU and any labels you added.',
+	},
+	{
+		title: 'Run',
+		text: 'The job gets its own workspace and its own home directory, so its caches and dotfiles stay apart from yours.',
+	},
+	{
+		title: 'Reset',
+		text: 'When the job ends, the workspace and credentials are wiped and a fresh registration takes the slot.',
+	},
+];
+
+const cacheLs = `$ selfaction cache ls --repo you/app
+ID  REPO     KEY                      SIZE    CREATED      LAST USED
+2   you.app  deps-Linux-e0e701b49347  266MB   2 hours ago  4 minutes ago
+1   you.app  deps-Linux-ae042401139c  257MB   3 days ago   2 days ago
+
+$ selfaction cache prune --repo you/app --unused-for 48h
+deleted 1 entries, 257MB`;
+
+const quickstart = `go install github.com/broisnischal/selfaction@latest
+cd your-repo
+selfaction run --list                                   # what would run, locally
+selfaction agent start --repo you/app --labels my-mac   # take jobs from GitHub`;
 ---
 
 <StarlightPage
@@ -9,4 +63,85 @@ import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
 		template: 'splash',
 		hero: { title: 'selfaction' },
 	}}
-/>
+>
+	<div class="not-content space-y-24 pb-16">
+		<section aria-labelledby="modes">
+			<h2 id="modes" class="text-3xl font-bold tracking-[-0.02em] text-ink">One binary, three jobs</h2>
+			<p class="mt-3 max-w-2xl text-ink-soft">
+				Your workflow files stay as they are. Marketplace actions such as checkout, setup-go and cache work unchanged.
+			</p>
+			<dl class="mt-8 divide-y divide-rule border-y border-rule">
+				{
+					modes.map((m) => (
+						<div class="grid grid-cols-1 gap-x-10 gap-y-3 py-7 md:grid-cols-[13rem_minmax(0,1fr)] lg:grid-cols-[13rem_minmax(0,1fr)_minmax(0,1fr)]">
+							<dt>
+								<a href={m.href} class="font-mono text-[0.95rem] font-semibold text-ink no-underline hover:underline decoration-signal decoration-2 underline-offset-4">
+									{m.command}
+								</a>
+							</dt>
+							<dd class="m-0 leading-relaxed text-ink-soft">{m.text}</dd>
+							<dd class="m-0 min-w-0 md:col-start-2 lg:col-start-3">
+								<Code code={m.example} lang="sh" frame="none" />
+							</dd>
+						</div>
+					))
+				}
+			</dl>
+		</section>
+
+		<section aria-labelledby="lifecycle">
+			<h2 id="lifecycle" class="text-3xl font-bold tracking-[-0.02em] text-ink">How a job reaches your machine</h2>
+			<p class="mt-3 max-w-2xl text-ink-soft">
+				Each slot of the agent repeats the same four steps, one job at a time.
+			</p>
+			<ol class="mt-10 grid list-none gap-8 p-0 sm:grid-cols-2 lg:grid-cols-4">
+				{
+					lifecycle.map((s, i) => (
+						<li class="border-t-2 border-ink pt-4">
+							<p class="m-0 flex items-baseline gap-3">
+								<span class="font-mono text-sm text-ink-soft">{i + 1}</span>
+								<span class="text-lg font-bold text-ink">{s.title}</span>
+							</p>
+							<p class="mt-2 leading-relaxed text-ink-soft">{s.text}</p>
+						</li>
+					))
+				}
+			</ol>
+		</section>
+
+		<section aria-labelledby="cache">
+			<div class="max-w-2xl">
+				<h2 id="cache" class="text-3xl font-bold tracking-[-0.02em] text-ink">A cache that stays on your network</h2>
+				<p class="mt-4 leading-relaxed text-ink-soft">
+					actions/cache v4, v5 and v6 restore from it without changes. Every repository gets its own space. Entries
+					unused for a week, or past a repository’s 10&nbsp;GB, are evicted least recently used first.
+				</p>
+				<p class="mt-4 leading-relaxed text-ink-soft">
+					When you need the space back, prune by repository, key prefix or age, and preview with{' '}
+					<code class="whitespace-nowrap text-ink">--dry-run</code> first.
+				</p>
+				<a href="/docs/guides/cleaning-up/" class="mt-6 inline-block font-semibold text-ink decoration-signal decoration-2 underline-offset-4">
+					Cleaning up caches and runners
+				</a>
+			</div>
+			<div class="mt-8">
+				<Code code={cacheLs} lang="txt" frame="terminal" title="Terminal" />
+			</div>
+		</section>
+
+		<section aria-labelledby="start" class="rounded-xl bg-paper p-8 sm:p-10">
+			<h2 id="start" class="text-3xl font-bold tracking-[-0.02em] text-ink">Start in a minute</h2>
+			<p class="mt-3 max-w-2xl text-ink-soft">
+				You need Go 1.26 or newer, and Docker for local runs. The agent itself needs only a GitHub login.
+			</p>
+			<div class="mt-6">
+				<Code code={quickstart} lang="sh" frame="terminal" title="Terminal" />
+			</div>
+			<p class="mt-6 flex flex-wrap gap-x-6 gap-y-2">
+				<a href="/docs/" class="font-semibold text-ink decoration-signal decoration-2 underline-offset-4">Read the docs</a>
+				<a href="/blog/" class="font-semibold text-ink decoration-signal decoration-2 underline-offset-4">Read how it was built</a>
+				<a href="https://github.com/broisnischal/selfaction" class="font-semibold text-ink decoration-signal decoration-2 underline-offset-4">Source on GitHub</a>
+			</p>
+		</section>
+	</div>
+</StarlightPage>
