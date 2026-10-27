@@ -2,15 +2,19 @@
 
 Run GitHub Actions on your own machines. It works with your existing workflows and the actions on the Marketplace, and runs on your laptop, a server or in Docker.
 
+**Website, docs and blog: https://selfaction.jotko.workers.dev**
+
 | Command | What it does |
 |---|---|
 | `selfaction run` | Runs a repo's `.github/workflows` locally in Docker (nektos/act engine), with a persistent `actions/cache` backend and an artifact server. |
 | `selfaction agent` | Makes this machine a pool of **GitHub self-hosted runners**. It registers single-use (JIT) runners and runs the official `actions/runner`, so it is 100% compatible. Workflows target it with `runs-on: [self-hosted, <label>]`. |
 | `selfaction cache` | A shared `actions/cache` server for every repo, with per-repo isolation, LRU/TTL eviction, and `ls` / `prune` / `gc` tools. |
 
-Build it (Go 1.26+):
+Install it (Go 1.26+):
 
 ```sh
+go install github.com/broisnischal/selfaction@latest
+# or, from a clone:
 go build -o bin/selfaction .
 ```
 
@@ -42,10 +46,10 @@ jobs:
 Each slot does the same cycle:
 1. Registers a just-in-time runner. It has at most one job and the credential is passed through the environment, not argv.
 2. Runs that one job.
-3. Wipes the workspace, diagnostics and credentials. The `actions/setup-*` tool cache is kept.
+3. Wipes the workspace, diagnostics and credentials. The `actions/setup-*` tool cache and the slot's own home directory are kept.
 4. Repeats.
 
-Runners are unregistered when the agent stops.
+Host-mode jobs run with a per-slot `HOME`, so their caches and dotfiles stay apart from yours (`--share-home` turns that off). Runners that GitHub reports offline, for example after the machine slept, are restarted. Runners are unregistered when the agent stops.
 
 - **Keep it running:** `selfaction agent install --repo you/app --labels my-mac` (launchd on macOS, `systemd --user` on Linux). Logs go to `~/.selfaction/agent.log`.
 - **Isolated jobs:** `--mode docker` runs each job in a fresh `ghcr.io/actions/actions-runner` container. Add `--docker-socket` if jobs use `container:`, `services:` or `docker build`.
@@ -53,7 +57,7 @@ Runners are unregistered when the agent stops.
 - **GitHub Enterprise Server:** `--github-api https://ghe.example.com/api/v3`.
 - **Token:** `--token`, `--token-file`, `$GITHUB_TOKEN`, or your `gh` login. Repo runners need repo admin (classic `repo` scope or fine-grained "Administration: write"). Org runners need `admin:org`.
 
-Only attach runners to repositories you trust. On a public repo, a fork's pull request can run code on your machine.
+Only attach runners to repositories you trust. On a public repo, target self-hosted runners only from `push` to `main` or `workflow_dispatch`, never from `pull_request`, so a fork's code cannot run on your machine.
 
 ## Shared cache server
 
@@ -104,7 +108,21 @@ internal/run           act-based local execution
 internal/cache         cache store (SQLite index + blob files) and HTTP API
 internal/agent         JIT runner pool, runner download/verify, service install
 examples/cache-demo    workflow that exercises actions/cache end to end
+site/                  website: Astro, Starlight and Tailwind, deployed to Cloudflare Workers
 ```
+
+## Website
+
+The site in `site/` holds the landing page, docs, blog and the record of real runs.
+
+```sh
+cd site
+npm ci
+npm run dev       # http://localhost:4321
+npm run deploy    # build and deploy with wrangler (needs `wrangler login`)
+```
+
+On every push to `main` that touches `site/`, the `site` workflow builds it on a selfaction runner and deploys it. Add a `CLOUDFLARE_API_TOKEN` secret (the "Edit Cloudflare Workers" token template) and a `CLOUDFLARE_ACCOUNT_ID` variable to enable the deploy step.
 
 ## Roadmap
 
