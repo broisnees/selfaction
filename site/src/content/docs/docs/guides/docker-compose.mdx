@@ -1,0 +1,51 @@
+---
+title: Run it with Docker Compose
+description: Host the cache server, and optionally Docker-mode runners, with the compose file in the repository.
+sidebar:
+  order: 6
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The repository ships a `docker-compose.yml` with two services: a cache server, and an agent that runs each job in a fresh runner container. The agent is behind a profile, so it only starts when you ask for it.
+
+## Cache server only
+
+```sh
+git clone https://github.com/broisnischal/selfaction
+cd selfaction
+docker compose up -d
+```
+
+The server listens on port 7979 and keeps its data in the `cache-data` volume. Read its token, then point runs at it:
+
+```sh
+docker compose exec cache cat /data/cache/token
+selfaction run --cache-url http://<docker-host>:7979/<token>
+```
+
+To choose the token yourself, set `SELFACTION_CACHE_TOKEN` before `docker compose up`.
+
+## With runners
+
+```sh
+GITHUB_TOKEN=ghp_… GITHUB_REPO=you/app docker compose --profile agent up -d
+```
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `GITHUB_TOKEN` | required | Token that can manage the repository's runners |
+| `GITHUB_REPO` | required | `owner/repo` to serve |
+| `SLOTS` | `2` | Jobs at once |
+| `LABELS` | `selfaction` | Extra runner labels |
+| `RUNNER_NAME` | `selfaction-docker` | Runner name prefix |
+
+Target the runners with `runs-on: [self-hosted, selfaction]`.
+
+The agent talks to the host's Docker daemon through the mounted socket and starts a sibling container for every job. Jobs also get the socket (`--docker-socket`), so `container:`, `services:` and `docker build` work.
+
+<Aside type="caution">
+A job that can reach the Docker socket can control the Docker host. Use this setup for repositories you trust.
+</Aside>
+
+`docker compose stop` gives running jobs up to 60 seconds to cancel and report back before the runners are removed from GitHub.
