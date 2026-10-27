@@ -54,7 +54,7 @@ Done on 2026-10-27 against this repository, through a quick tunnel: on 0e50436 `
 - [x] Docs page `site/src/content/docs/docs/guides/server.mdx`: how it works, setup, flags, security (fork PRs are skipped by default; job log URLs are unguessable; workers hold the server's GitHub token).
 - [x] CLI reference entries in `site/src/content/docs/docs/reference/cli.mdx`.
 - [x] README section, and remove "Server mode" from the roadmap there and on the site.
-- [ ] Blog post once the real end-to-end run works.
+- [x] Blog post once the real end-to-end run works (`site/src/content/blog/server-mode-first-real-push.md`, committed, not deployed).
 - [ ] Optional: GitHub App authentication.
   - Sign a JWT (RS256) with the app's private key and exchange it at `/app/installations/{id}/access_tokens`, using `installation.id` from the delivery.
   - That gives short-lived per-repository tokens instead of one personal token, and enables the Checks API.
