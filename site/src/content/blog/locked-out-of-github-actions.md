@@ -22,9 +22,9 @@ The other workflow, the one that targets `runs-on: [self-hosted, selfaction-loca
 
 | Run | Runner | Result | Time |
 | --- | --- | --- | --- |
-| [40356880273](https://github.com/broisnischal/selfaction/actions/runs/40356880273) | `macbook-pro-1-e9e696` | passed | 3m 17s |
-| [40356894290](https://github.com/broisnischal/selfaction/actions/runs/40356894290) | `macbook-pro-2-c41842` | passed | 3m 38s |
-| [40356894448](https://github.com/broisnischal/selfaction/actions/runs/40356894448) | GitHub-hosted | refused | 3s |
+| [40356880273](https://github.com/broisnees/selfaction/actions/runs/40356880273) | `macbook-pro-1-e9e696` | passed | 3m 17s |
+| [40356894290](https://github.com/broisnees/selfaction/actions/runs/40356894290) | `macbook-pro-2-c41842` | passed | 3m 38s |
+| [40356894448](https://github.com/broisnees/selfaction/actions/runs/40356894448) | GitHub-hosted | refused | 3s |
 
 GitHub still scheduled the jobs, streamed their logs and recorded the results. Only the machine changed.
 
@@ -42,4 +42,4 @@ selfaction agent start --repo you/app --labels my-mac
 
 Add `[self-hosted, my-mac]` to one job and you have a second place for CI to run, one that does not depend on the state of a billing page.
 
-The lock is still on as this is written. Every job that has run on [the repository](https://github.com/broisnischal/selfaction/actions) since then ran on that MacBook or in a container next to it.
+The lock is still on as this is written. Every job that has run on [the repository](https://github.com/broisnees/selfaction/actions) since then ran on that MacBook or in a container next to it.

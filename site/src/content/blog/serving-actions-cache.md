@@ -39,7 +39,7 @@ Each store is a directory holding an SQLite index and one plain file per archive
 The scope is the repository, carried in the URL itself:
 
 ```txt
-ACTIONS_CACHE_URL=http://10.0.0.5:7979/<token>/broisnischal.selfaction/
+ACTIONS_CACHE_URL=http://10.0.0.5:7979/<token>/broisnees.selfaction/
 ```
 
 Two projects that both use a key like `node-modules-linux` therefore never restore each other's files, and the token never needs to be sent as a header.

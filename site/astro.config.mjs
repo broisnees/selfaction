@@ -3,7 +3,7 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import tailwindcss from '@tailwindcss/vite';
 
-const repo = 'https://github.com/broisnischal/selfaction';
+const repo = 'https://github.com/broisnees/selfaction';
 
 export default defineConfig({
 	site: 'https://selfaction.jotko.workers.dev',

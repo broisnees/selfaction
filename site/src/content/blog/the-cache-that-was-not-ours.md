@@ -55,7 +55,7 @@ Two workflow changes came with it. Self-hosted jobs now run only for pushes to `
 | --- | --- | --- |
 | setup-go | 21 s, up to 1,094 s | 1 s |
 | setup-go post step | 164 s | 0 s |
-| Whole job | 3m 38s | [58 s](https://github.com/broisnischal/selfaction/actions/runs/40436118928) |
+| Whole job | 3m 38s | [58 s](https://github.com/broisnees/selfaction/actions/runs/40436118928) |
 | Actions caches in the repository | 8 GB | none |
 
 ## If you run self-hosted runners

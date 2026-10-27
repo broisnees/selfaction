@@ -22,7 +22,7 @@ selfaction is a single Go binary. What else you need depends on how you use it:
 <TabItem label="go install">
 
 ```sh
-go install github.com/broisnischal/selfaction@latest
+go install github.com/broisnees/selfaction@latest
 ```
 
 The binary lands in `$(go env GOPATH)/bin`. Add that directory to your `PATH` if `selfaction` is not found. With Go 1.21 or newer installed, Go downloads the 1.26 toolchain by itself.
@@ -31,7 +31,7 @@ The binary lands in `$(go env GOPATH)/bin`. Add that directory to your `PATH` if
 <TabItem label="From source">
 
 ```sh
-git clone https://github.com/broisnischal/selfaction
+git clone https://github.com/broisnees/selfaction
 cd selfaction
 go build -o bin/selfaction .
 ```
@@ -40,7 +40,7 @@ go build -o bin/selfaction .
 <TabItem label="Docker image">
 
 ```sh
-git clone https://github.com/broisnischal/selfaction
+git clone https://github.com/broisnees/selfaction
 cd selfaction
 docker build -t selfaction:local .
 docker run --rm selfaction:local --version

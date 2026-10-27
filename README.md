@@ -13,7 +13,7 @@ Run GitHub Actions on your own machines. It works with your existing workflows a
 Install it (Go 1.26+):
 
 ```sh
-go install github.com/broisnischal/selfaction@latest
+go install github.com/broisnees/selfaction@latest
 # or, from a clone:
 go build -o bin/selfaction .
 ```

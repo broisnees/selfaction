@@ -1,6 +1,6 @@
-// Real runs from github.com/broisnischal/selfaction. Durations come from the
+// Real runs from github.com/broisnees/selfaction. Durations come from the
 // GitHub API (step completed_at minus started_at), not from estimates.
-export const repo = 'https://github.com/broisnischal/selfaction';
+export const repo = 'https://github.com/broisnees/selfaction';
 export const runUrl = (id: number) => `${repo}/actions/runs/${id}`;
 
 export type Step = { name: string; seconds: number };
