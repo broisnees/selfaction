@@ -4,6 +4,7 @@
 name: local-runner
 on:
   push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       runner:
@@ -25,6 +26,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: false # the runner keeps its module cache between jobs
       - run: go vet ./...
       - run: go test ./...
       - run: go build -o bin/selfaction . && ./bin/selfaction --version
