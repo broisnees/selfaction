@@ -46,20 +46,27 @@ func gitRepo(t *testing.T) (string, string) {
 	return "file://" + bare, git(work, "rev-parse", "HEAD")
 }
 
-func TestWorkerRunsClaimedJobs(t *testing.T) {
+// testServer starts a selfaction server with worker token "wt", backed by a GitHub API that accepts every status.
+func testServer(t *testing.T) (*server.Store, *httptest.Server) {
+	t.Helper()
 	FlushEvery = 50 * time.Millisecond
-	cloneURL, sha := gitRepo(t)
 	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(201) }))
-	defer gh.Close()
+	t.Cleanup(gh.Close)
 	store, err := server.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(func() { store.Close() })
 	srv := &server.Server{Store: store, GitHub: &github.Client{API: gh.URL, Token: "gh-token"}, WorkerToken: "wt",
 		Log: logrus.New(), PollFor: 200 * time.Millisecond}
 	api := httptest.NewServer(srv.Handler())
-	defer api.Close()
+	t.Cleanup(api.Close)
+	return store, api
+}
+
+func TestWorkerRunsClaimedJobs(t *testing.T) {
+	cloneURL, sha := gitRepo(t)
+	store, api := testServer(t)
 
 	enqueue := func(name string) *server.Job {
 		j := &server.Job{Repo: "o/app", SHA: sha, Ref: "refs/heads/main", Event: "push", Workflow: ".github/workflows/" + name + ".yml",
@@ -151,5 +158,39 @@ func TestWorkerRunsClaimedJobs(t *testing.T) {
 		if e.Level <= logrus.WarnLevel {
 			t.Errorf("worker logged %s: %s", e.Level, e.Message)
 		}
+	}
+}
+
+func TestStoppingTheWorkerCancelsItsJobs(t *testing.T) {
+	cloneURL, sha := gitRepo(t)
+	store, api := testServer(t)
+	j := &server.Job{Repo: "o/app", SHA: sha, Ref: "refs/heads/main", Event: "push", Workflow: ".github/workflows/ci.yml",
+		Name: "ci", Labels: []string{"ubuntu-latest"}, Payload: []byte(`{}`), CloneURL: cloneURL}
+	if err := store.Enqueue(t.Context(), j); err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	w := &Worker{Server: api.URL, Token: "wt", Name: "box", Labels: []string{"ubuntu-latest"}, Dir: t.TempDir(), Log: logrus.New(),
+		Execute: func(ctx context.Context, o run.Options) error {
+			close(started)
+			<-ctx.Done()
+			return ctx.Err()
+		}}
+	ctx, stop := context.WithCancel(context.Background())
+	stopped := make(chan struct{})
+	go func() {
+		w.Run(ctx)
+		close(stopped)
+	}()
+	<-started
+	stop()
+	<-stopped
+
+	got, err := store.Get(t.Context(), j.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != server.Cancelled {
+		t.Errorf("a job whose worker stopped is %s, want %s", got.Status, server.Cancelled)
 	}
 }

@@ -152,8 +152,11 @@ func (w *Worker) work(ctx context.Context, name string, c *server.Claim) {
 	select {
 	case <-cancelled: // the server already ended the job; finishing it again only gets a 409
 	default:
+		// ctx is done when the worker is stopping; the result must still reach the server.
+		fctx, stop := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer stop()
 		body, _ := json.Marshal(map[string]string{"worker": name, "result": result})
-		if res, err := w.post(ctx, "/api/v1/jobs/"+j.ID+"/finish", "application/json", body); err != nil {
+		if res, err := w.post(fctx, "/api/v1/jobs/"+j.ID+"/finish", "application/json", body); err != nil {
 			w.Log.Errorf("%s: report result of job %s: %v", name, j.ID, err)
 		} else {
 			res.Body.Close()
