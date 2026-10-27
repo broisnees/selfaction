@@ -6,6 +6,7 @@ import tailwindcss from '@tailwindcss/vite';
 const repo = 'https://github.com/broisnischal/selfaction';
 
 export default defineConfig({
+	site: 'https://selfaction.jotko.workers.dev',
 	integrations: [
 		starlight({
 			title: 'selfaction',
