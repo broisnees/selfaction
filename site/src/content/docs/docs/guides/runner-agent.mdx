@@ -1,0 +1,129 @@
+---
+title: Use your machine as a GitHub runner
+description: Register this machine as GitHub Actions self-hosted runners with selfaction agent.
+sidebar:
+  order: 3
+---
+
+import { Steps, Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+`selfaction agent` makes this machine a pool of GitHub Actions runners. GitHub still decides when workflows run, shows their logs and reports checks on pull requests. Only the work happens here, on GitHub's own runner software, so anything that works on a GitHub-hosted runner works the same way.
+
+## Start the agent
+
+<Steps>
+
+1. Make sure you are signed in to the GitHub CLI (`gh auth status`), or have a token ready. See [Tokens](#tokens) for the permissions it needs.
+
+2. Start the agent for one repository, with a label of your choice:
+
+   ```sh
+   selfaction agent start --repo you/app --labels my-mac
+   ```
+
+   The first start downloads GitHub's runner and checks it against the checksum GitHub publishes. You will see each slot come online:
+
+   ```txt
+   serving you/app with 1 slot(s), labels self-hosted,macOS,ARM64,my-mac
+   my-mac-1-9c41e2: online, waiting for a job
+   √ Connected to GitHub
+   Listening for Jobs
+   ```
+
+3. Point a job at it:
+
+   ```yaml
+   jobs:
+     test:
+       runs-on: [self-hosted, my-mac]
+   ```
+
+</Steps>
+
+Every runner gets the `self-hosted` label, its OS (`macOS`, `Linux`) and its CPU (`X64`, `ARM64`), plus the labels you add. A job runs here only when all of its `runs-on` labels match.
+
+To serve every repository in an organization, use `--org your-org` instead of `--repo`.
+
+## Run several jobs at once
+
+Each slot runs one job at a time. Add slots for parallel jobs:
+
+```sh
+selfaction agent start --repo you/app --labels my-mac --slots 3
+```
+
+## Host mode and Docker mode
+
+<Tabs>
+<TabItem label="Host mode (default)">
+
+Jobs run directly on this machine as your user. Use it when jobs need the real hardware or OS: Xcode on a Mac, a GPU, a large amount of memory.
+
+Each slot has its own working directory and its own home directory, so a job's language caches (Go modules, npm, pip) and dotfiles stay apart from yours, and survive from one job to the next. Docker keeps working because jobs still see your Docker configuration. Pass `--share-home` to run jobs with your own home directory instead.
+
+Host mode works on macOS and Linux.
+
+</TabItem>
+<TabItem label="Docker mode">
+
+```sh
+selfaction agent start --repo you/app --labels my-docker --mode docker
+```
+
+Each job runs in a fresh `ghcr.io/actions/actions-runner` container that is removed afterwards. Nothing from one job can affect the next. Runners in Docker mode are labelled `Linux`.
+
+Jobs that use `container:`, `services:` or `docker build` need the host's Docker daemon. Pass `--docker-socket` to give it to them, knowing that this hands jobs root on the Docker host.
+
+</TabItem>
+</Tabs>
+
+## What happens around each job
+
+<Steps>
+
+1. The agent asks GitHub for a single-use runner registration. GitHub hands it the next matching job.
+2. When the job ends, the agent deletes the workspace, the runner's diagnostics and the registration's credentials. The tool cache that `actions/setup-*` fills, and the slot's home directory, are kept.
+3. A fresh registration takes the slot.
+
+</Steps>
+
+Every two minutes the agent asks GitHub whether each runner is online. A runner reported offline twice in a row, for example after the machine slept, is restarted.
+
+Press Ctrl-C, or send SIGTERM, to stop. Runners get 45 seconds to cancel a running job and report back, then their registrations are removed from GitHub.
+
+## Keep it running
+
+Install the agent as a service that starts when you log in:
+
+```sh
+selfaction agent install --repo you/app --labels my-mac --slots 2
+```
+
+On macOS this writes `~/Library/LaunchAgents/dev.selfaction.agent.plist` and logs to `~/.selfaction/agent.log`. On Linux it writes a `systemd --user` unit named `selfaction-agent`; read its output with `journalctl --user -u selfaction-agent`. Remove it with:
+
+```sh
+selfaction agent uninstall
+```
+
+## Tokens
+
+The agent looks for a token in this order: `--token`, `--token-file`, `$SELFACTION_GITHUB_TOKEN`, `$GITHUB_TOKEN`, then your GitHub CLI login.
+
+| Runners for | Classic token scope | Fine-grained permission |
+| --- | --- | --- |
+| A repository | `repo` | Administration: read and write |
+| An organization | `admin:org` | Self-hosted runners: read and write |
+
+When you install the service with `--token` or a token from the environment, it is saved to `~/.selfaction/agent/token`, readable only by you, rather than written into the service definition. A GitHub CLI login is looked up each time the service starts.
+
+<Aside type="caution">
+Jobs run code from your repository on this machine. Read [Security](/docs/concepts/security/) before attaching runners to a public repository.
+</Aside>
+
+## GitHub Enterprise Server
+
+```sh
+selfaction agent start --repo team/app --github-api https://ghe.example.com/api/v3
+```
+
+The runner software is still downloaded from github.com.
