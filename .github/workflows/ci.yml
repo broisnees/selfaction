@@ -1,7 +1,9 @@
 name: ci
 on:
   push:
+    paths-ignore: ['site/**']
   pull_request:
+    paths-ignore: ['site/**']
 jobs:
   test:
     runs-on: ubuntu-latest

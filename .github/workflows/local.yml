@@ -5,6 +5,7 @@ name: local-runner
 on:
   push:
     branches: [main]
+    paths-ignore: ['site/**']
   workflow_dispatch:
     inputs:
       runner:
