@@ -93,14 +93,20 @@ func (a *agentFlags) target() (string, error) {
 	return "", errors.New("pass --repo owner/repo or --org name")
 }
 
-// resolveToken returns the token and whether it came from the gh CLI (which a
-// service can call itself, so it never needs to be written to disk).
 func (a *agentFlags) resolveToken(ctx context.Context) (string, bool, error) {
-	if a.token != "" {
-		return a.token, false, nil
+	return resolveToken(ctx, a.token, a.tokenFile, "token")
+}
+
+// resolveToken finds a GitHub token: the flag tokenFlag (token), the token
+// file, the environment, then the gh CLI. It also returns whether the token came
+// from the gh CLI (which a service can call itself, so it never needs to be
+// written to disk).
+func resolveToken(ctx context.Context, token, tokenFile, tokenFlag string) (string, bool, error) {
+	if token != "" {
+		return token, false, nil
 	}
-	if a.tokenFile != "" {
-		b, err := os.ReadFile(a.tokenFile)
+	if tokenFile != "" {
+		b, err := os.ReadFile(tokenFile)
 		return strings.TrimSpace(string(b)), false, err
 	}
 	for _, env := range []string{"SELFACTION_GITHUB_TOKEN", "GITHUB_TOKEN"} {
@@ -111,7 +117,7 @@ func (a *agentFlags) resolveToken(ctx context.Context) (string, bool, error) {
 	if t, err := gh.GetToken(ctx, ""); err == nil && t != "" {
 		return t, true, nil
 	}
-	return "", false, errors.New("no GitHub token: pass --token/--token-file, set GITHUB_TOKEN, or run `gh auth login`")
+	return "", false, fmt.Errorf("no GitHub token: pass --%s/--token-file, set GITHUB_TOKEN, or run `gh auth login`", tokenFlag)
 }
 
 func agentStartCmd() *cobra.Command {

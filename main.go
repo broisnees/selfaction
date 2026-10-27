@@ -1,6 +1,6 @@
 // Command selfaction runs GitHub Actions workflows on your own machines:
-// locally with `run`, as GitHub self-hosted runners with `agent`, and with a
-// shared actions/cache backend via `cache`.
+// locally with `run`, as GitHub self-hosted runners with `agent`, from webhooks
+// with `server` and `worker`, and with a shared actions/cache backend via `cache`.
 package main
 
 import (
@@ -50,7 +50,7 @@ func main() {
 	}
 	root.PersistentFlags().StringVar(&homeDir, "home", defaultHome(), "data directory (env SELFACTION_HOME)")
 	root.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "debug logging")
-	root.AddCommand(runCmd(), cacheCmd(), agentCmd())
+	root.AddCommand(runCmd(), cacheCmd(), agentCmd(), serverCmd(), workerCmd())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
