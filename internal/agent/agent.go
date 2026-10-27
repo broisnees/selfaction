@@ -183,7 +183,10 @@ func (a *Agent) watch(ctx context.Context, stop context.CancelCauseFunc, name st
 		}
 		status, err := a.GitHub.RunnerStatus(ctx, a.Target, id)
 		switch {
-		case err != nil: // an API hiccup says nothing about the runner
+		case err != nil, status == "gone":
+			// An API error says nothing about the runner, and neither does a 404:
+			// a renamed owner or a permissions change produces one too, and GitHub
+			// disconnects runners whose registration really was deleted.
 		case status == "online":
 			offline = 0
 		default:
