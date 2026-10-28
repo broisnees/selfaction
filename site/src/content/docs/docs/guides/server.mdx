@@ -7,7 +7,7 @@ sidebar:
 
 import { Steps, Aside } from '@astrojs/starlight/components';
 
-With [`selfaction agent`](/docs/guides/runner-agent/), GitHub still schedules every job and runs it with its own runner software. Server mode leaves GitHub Actions out entirely. GitHub only sends webhooks. `selfaction server` turns them into a job queue, `selfaction worker` runs the jobs with the act engine (the same one as [`selfaction run`](/docs/guides/run-locally/)), and the results come back as commit statuses that link to a live log on your server.
+With [`selfaction agent`](/docs/guides/runner-agent/), GitHub still schedules every job and runs it with its own runner software. Server mode leaves GitHub Actions out entirely. GitHub only sends webhooks. `selfaction server` turns them into a job queue, `selfaction worker` runs the jobs with the act engine (the same one as [`selfaction run`](/docs/guides/run-locally/)), and the results come back as commit statuses, or check runs for a GitHub App, that link to a live log on your server.
 
 ## How it works
 
@@ -15,15 +15,19 @@ With [`selfaction agent`](/docs/guides/runner-agent/), GitHub still schedules ev
 
 1. GitHub sends a `push` or `pull_request` webhook to `<server>/webhooks/github`. The server checks its signature against your webhook secret and answers at once.
 
-2. The server reads the workflow files at that commit through the GitHub API and applies the same trigger rules GitHub does: `branches`, `tags`, `paths` and their `-ignore` forms, and the `types` of a pull request (by default `opened`, `synchronize` and `reopened`). Each workflow the event triggers becomes one queued job, and the commit gets a pending status.
+2. The server reads the workflow files at that commit through the GitHub API and applies the same trigger rules GitHub does: `branches`, `tags`, `paths` and their `-ignore` forms, and the `types` of a pull request (by default `opened`, `synchronize` and `reopened`). Each workflow the event triggers becomes a run.
 
-3. A worker that serves every `runs-on` label in the workflow claims the job, makes a shallow clone of exactly that commit, and runs the workflow with the webhook payload as `github.event`. Its output reaches the server every two seconds.
+3. Every job of the run is queued on its own, once per `strategy.matrix` combination. A job waits until the jobs in its `needs` have finished. Then the server evaluates its `if`, which defaults to `success()`, and either releases it or skips it. Each job shows on the commit as a status of its own.
 
-4. The server sets the commit status to success or failure. The status links to the job's page, which shows the log as it arrives.
+4. A worker that serves every label in the job's `runs-on` claims it, makes a shallow clone of exactly that commit, and runs that one job with the webhook payload as `github.event`. It gets the results and outputs of the jobs it needs, the repository's secrets, and access to the run's artifacts. Its output reaches the server every two seconds.
+
+5. The worker reports the result and the job's `outputs`. The server updates the commit, and releases the jobs that were waiting for this one.
 
 </Steps>
 
-A job is a whole workflow: all of its jobs run on the worker that claimed it, in dependency order, as `selfaction run` would run them. The commit shows one status per workflow, named `selfaction/<workflow> (<event>)`.
+Jobs of one run can run on different machines at the same time. A workflow with a Linux, a macOS and a Windows job runs each on a worker for that system. Statuses are named like GitHub's checks: `selfaction/<workflow> / <job> (<event>)`, for example `selfaction/ci / test (ubuntu-latest) (push)`.
+
+Every run also has a page, `<server>/runs/<id>`, linked from each job page, with all its jobs and its artifacts.
 
 ## Set it up
 
@@ -42,7 +46,7 @@ A job is a whole workflow: all of its jobs run on the worker that claimed it, in
    start workers with: selfaction worker --server https://ci.example.com --token "$(cat /home/you/.selfaction/server/worker-token)"
    ```
 
-   The worker token is generated on first start. The server uses your GitHub CLI login, or a token from `--github-token`, `--token-file`, `$SELFACTION_GITHUB_TOKEN` or `$GITHUB_TOKEN`. See [Tokens](#tokens) for what it needs.
+   The worker token is generated on first start. The server uses your GitHub CLI login, or a token from `--github-token`, `--token-file`, `$SELFACTION_GITHUB_TOKEN` or `$GITHUB_TOKEN`. See [Tokens](#tokens) for what it needs, or [run it as a GitHub App](#as-a-github-app).
 
 2. Start a worker on each machine that should run jobs:
 
@@ -50,7 +54,7 @@ A job is a whole workflow: all of its jobs run on the worker that claimed it, in
    selfaction worker --server https://ci.example.com --token <worker token> --slots 2
    ```
 
-   On the server's own machine, `--token` can be left out: the worker reads the token file.
+   On the server's own machine, `--token` can be left out: the worker reads the token file. To keep a worker running, install it as a [service](#keep-workers-running).
 
 3. Add a webhook to the repository with the same secret:
 
@@ -63,7 +67,7 @@ A job is a whole workflow: all of its jobs run on the worker that claimed it, in
 
    GitHub sends a `ping` right away; the webhook's Recent Deliveries tab shows whether it got through. An organization webhook (`orgs/<org>/hooks`) covers every repository in the organization.
 
-4. Push a commit. The commit page shows `selfaction/<workflow> (push)` going from Queued to Running to Passed.
+4. Push a commit. The commit page shows one status per job going from Queued to Running to Passed.
 
 </Steps>
 
@@ -92,27 +96,99 @@ Without `--external-url`, the server uses this machine's network address. Worker
 
 ## Workers and labels
 
-A worker serves the `runs-on` labels of its built-in platforms (`ubuntu-latest`, `ubuntu-24.04`, `ubuntu-22.04`, `ubuntu-20.04`, `self-hosted`, and `macos-*` on a Mac), every label you map with `-P`, and anything in `--labels`:
+A worker serves the `runs-on` labels of its built-in platforms, every label you map with `-P`, and anything in `--labels`:
+
+| Worker on | Built-in labels | Where those jobs run |
+| --- | --- | --- |
+| Any system with Docker | `ubuntu-latest`, `ubuntu-24.04`, `ubuntu-22.04`, `ubuntu-20.04` | In a container |
+| An ARM64 system with Docker | also `ubuntu-24.04-arm`, `ubuntu-22.04-arm` | In an ARM container |
+| Any system | `self-hosted` | On the worker's machine |
+| macOS | `macos-latest`, `macos-26`, `macos-15`, `macos-14`, `macos-13` | On the Mac |
+| Windows | `windows-latest`, `windows-2025`, `windows-2022` | On the Windows machine |
 
 ```sh
 selfaction worker --server https://ci.example.com -P ubuntu-latest=catthehacker/ubuntu:full-latest --labels gpu
 ```
 
-`ubuntu-*` jobs run in Docker containers. `self-hosted` and `macos-*` jobs run directly on the worker's machine. Each slot runs one job at a time and deletes its workspace afterwards. A job that runs longer than `--job-timeout` (6 hours, GitHub's limit) is cancelled.
+A job goes to a worker that carries every one of its labels, so `runs-on: [macos-latest, xcode]` only lands on a Mac started with `--labels xcode`. Which container image or host a job uses follows its first label that has a platform. See [Build for every platform](/docs/guides/platforms/) for macOS, iOS, Windows, Android and ARM Linux workers.
+
+Jobs that run on the worker's machine get a `HOME` of their own per slot, in `<home>/worker/home/<slot>`, so they don't share your caches, dotfiles and credentials. `--share-home` turns that off, for example when a job needs your login keychain. Each slot runs one job at a time and deletes its workspace afterwards. A job that runs longer than `--job-timeout` (6 hours, GitHub's limit) is cancelled.
 
 When a worker stops sending output for 3 minutes, the server fails its job with "The worker stopped responding". Stopping a worker with Ctrl-C cancels its running jobs and reports them as cancelled.
+
+### Keep workers running
+
+```sh
+selfaction worker install --server https://ci.example.com --token <worker token> --slots 2
+selfaction worker uninstall
+```
+
+`install` takes the same flags as `worker` and installs it as a login service: a launchd agent (`dev.selfaction.worker`) on macOS, a `systemd --user` unit (`selfaction-worker`) on Linux, and a scheduled task (`selfaction-worker`) that starts when you log on to Windows. Logs go to `<home>/worker.log`. A token passed with `--token` is saved to `<home>/worker/token`, readable only by you, rather than written into the service definition.
+
+## Jobs, needs and matrices
+
+The server plans a run the way GitHub does:
+
+- **`needs`** waits for the named jobs. A job whose needs failed, were cancelled or were skipped is skipped too, unless its `if` uses `always()`, `failure()` or `cancelled()`. `needs.<job>.result` and `needs.<job>.outputs` work in `if`, in `runs-on`, in `strategy.matrix` and in the job's steps, even when the needed job ran on another worker.
+- **`strategy.matrix`** with `include` and `exclude` becomes one job per combination. A matrix built from expressions, such as `${{ fromJSON(needs.setup.outputs.targets) }}`, is expanded when its needs finish. `runs-on` and `name` can use `matrix`.
+- **`fail-fast`** (on by default) cancels a matrix job's other combinations when one fails. **`max-parallel`** limits how many combinations run at once.
+- **`if`** on a job can use the `github` and `needs` contexts. A job whose `if` is false is shown as skipped, which GitHub treats like success.
+- **Job outputs** are the outputs the worker reports. For a matrix job, a combination that sets an output wins over one that leaves it empty.
+
+`github.run_id` and `github.run_number` count the server's runs, so cache keys and version numbers that use them change from run to run.
+
+## Secrets
+
+The server keeps repository secrets encrypted with AES-256-GCM, under a key it generates in `<home>/server/secrets.key`. Jobs of that repository get them as `secrets.<NAME>`, and act masks their values in the log.
+
+```sh
+echo -n "$NPM_TOKEN" | selfaction server secret set you/app NPM_TOKEN
+selfaction server secret set you/app DEPLOY_KEY --body "$(cat deploy_key)"
+selfaction server secret ls you/app
+selfaction server secret rm you/app NPM_TOKEN
+```
+
+Names are case-insensitive and follow GitHub's rules: letters, digits and `_`, not starting with a digit or `GITHUB_`. Values are limited to 48 KB, as on GitHub. Pull requests from forks never get secrets, even with `--allow-forks`.
+
+The commands take `--server` and `--token` (the worker token), like `server jobs`. Keep a copy of `secrets.key`: without it the stored secrets can't be decrypted.
+
+## Artifacts
+
+The server is also the artifact store for its runs. `actions/upload-artifact` and `actions/download-artifact` (v4 and newer) talk to it, so a job on one worker downloads what a job on another uploaded:
+
+```yaml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: make dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+  test:
+    needs: build
+    runs-on: [macos-latest]
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+```
+
+Artifacts are kept in `<home>/server/artifacts` for `--artifact-retention` (90 days, GitHub's default); a shorter `retention-days` on the upload wins. The run page lists them with download links. Each job's access token is valid only while that job runs and only for its own run. `--no-artifacts` turns this off; each worker then keeps its jobs' uploads in `<home>/worker/artifacts/<job id>`.
+
+Job containers reach the artifact service at `--external-url`, which has to be the server's own address, not a path under another site: `@actions/artifact` only uses the URL's origin.
 
 ## Shared cache
 
 The server also serves the `actions/cache` API under `/cache/`, and hands its address to every worker. A cache saved by a job on one worker is restored by the next job on any worker. It uses the same store and retention flags (`--ttl`, `--max-repo-size`, `--max-total-size`) as [`cache serve`](/docs/guides/cache-server/), kept in `<home>/server/cache`. Turn it off with `--no-cache`; workers then fall back to a local cache each.
 
-Job containers download caches from `--external-url`, so that address has to be reachable from the workers' machines.
-
 ## Watch and cancel jobs
 
 ```sh
-selfaction server jobs              # the latest 100 jobs
-selfaction server cancel <job id>   # a running job stops within seconds
+selfaction server jobs                    # the latest 100 jobs, with their run ids
+selfaction server cancel <job id>         # a running job stops within seconds
+selfaction server cancel <run id>         # every unfinished job of the run
 ```
 
 Both take `--server` (default `http://localhost:8080`) and `--token`, the worker token. They call the worker API, which you can also use directly:
@@ -120,22 +196,48 @@ Both take `--server` (default `http://localhost:8080`) and `--token`, the worker
 ```sh
 curl -H "Authorization: Bearer $TOKEN" https://ci.example.com/api/v1/jobs
 curl -X POST -H "Authorization: Bearer $TOKEN" https://ci.example.com/api/v1/jobs/<id>/cancel
+curl -X POST -H "Authorization: Bearer $TOKEN" https://ci.example.com/api/v1/runs/<id>/cancel
 ```
+
+## As a GitHub App
+
+With a token, the server acts as you: one token for every repository, and results as commit statuses. As a GitHub App, it gets a short-lived token per installation instead, and reports check runs, which GitHub shows in the Checks tab of pull requests.
+
+<Steps>
+
+1. Create a GitHub App (Settings, Developer settings, GitHub Apps) with:
+   - Webhook URL `https://ci.example.com/webhooks/github` and a webhook secret
+   - Repository permissions: Checks read and write, Contents read, Pull requests read, Metadata read
+   - Events: Push and Pull request
+
+2. Generate a private key for the app and install it on your repositories.
+
+3. Start the server with the app's id and key instead of a token:
+
+   ```sh
+   selfaction server --external-url https://ci.example.com --webhook-secret "$SECRET" \
+     --app-id 123456 --app-key ~/selfaction.2026-10-27.private-key.pem
+   ```
+
+</Steps>
+
+The app's own webhook replaces the repository webhook. Each job's `GITHUB_TOKEN` is an installation token, which GitHub issues for an hour, so a job can use it for API calls in its first hour.
 
 ## Differences from GitHub Actions
 
-- Only `push` and `pull_request` start jobs. `workflow_dispatch`, `schedule` and other events are ignored.
-- A pull request job runs the head commit of the pull request, not the merge commit GitHub creates.
-- Jobs get one secret, `GITHUB_TOKEN`, which is the server's GitHub token. Repository secrets and variables are not available.
-- Results are commit statuses, not check runs, so they have no annotations or job summaries.
+- Only `push` and `pull_request` start runs. `workflow_dispatch`, `schedule` and other events are ignored, and there is no re-run button.
+- A pull request runs its head commit, not the merge commit GitHub creates.
+- Jobs get the repository secrets set with `server secret`, and `GITHUB_TOKEN`, which is the server's token or the app's installation token. Organization secrets, environments and configuration variables (`vars`) are not available.
+- `concurrency`, `environment` and `permissions` are ignored.
+- Results are commit statuses, or check runs for a GitHub App, without annotations or job summaries.
 
 ## Security
 
-- **Fork pull requests are skipped.** Their code would run on your workers with your token. Pass `--allow-forks` only for private repositories, or when you trust everyone who can open a pull request.
+- **Fork pull requests are skipped.** Their code would run on your workers with your token. Pass `--allow-forks` only for private repositories, or when you trust everyone who can open a pull request. Their jobs never get secrets.
 - **The webhook secret is required.** The server refuses to start without one, and deliveries without a valid signature are rejected, so nobody else can queue jobs.
-- **Workers hold the server's GitHub token.** They use it to clone and pass it to jobs as `GITHUB_TOKEN`, so run workers only on machines you trust, and give the token no more access than your workflows need.
-- **Job pages are public but unguessable.** Each job id is 96 random bits, so a log can only be opened through the commit status that links to it. Don't print secrets in workflow output.
-- **The worker token** lets its holder claim jobs, read their tokens and cancel them. It is kept in `<home>/server/worker-token` with permissions `0600`.
+- **Workers hold the server's GitHub token and the repositories' secrets** while they run a job. Run workers only on machines you trust, and give the token no more access than your workflows need.
+- **Job and run pages are public but unguessable.** Each id is 96 random bits, so a log or an artifact can only be opened through a link from the commit. Don't print secrets in workflow output; act masks the values it knows.
+- **The worker token** lets its holder claim jobs, read their tokens and secrets, set secrets and cancel jobs. It is kept in `<home>/server/worker-token` with permissions `0600`.
 
 ## Tokens
 

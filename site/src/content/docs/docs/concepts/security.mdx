@@ -54,7 +54,7 @@ Bots push branches too. Dependabot pushes a branch for every update it proposes,
 
 ## Server mode
 
-`selfaction server` skips pull requests from forks unless you pass `--allow-forks`, and refuses webhook deliveries without a valid signature. Its workers receive the server's GitHub token for every job, so run them only on machines you trust. See [Run workflows from webhooks](/docs/guides/server/#security).
+`selfaction server` skips pull requests from forks unless you pass `--allow-forks`, and refuses webhook deliveries without a valid signature. Its workers receive the server's GitHub token and the repository's secrets for every job, so run them only on machines you trust. Fork pull requests never get secrets. Secrets are encrypted at rest with AES-256-GCM under a key in `<home>/server/secrets.key`, and act masks their values in logs. See [Run workflows from webhooks](/docs/guides/server/#security).
 
 ## The cache server
 

@@ -8,10 +8,22 @@ Run GitHub Actions on your own machines. It works with your existing workflows a
 |---|---|
 | `selfaction run` | Runs a repo's `.github/workflows` locally in Docker (nektos/act engine), with a persistent `actions/cache` backend and an artifact server. |
 | `selfaction agent` | Makes this machine a pool of **GitHub self-hosted runners**. It registers single-use (JIT) runners and runs the official `actions/runner`, so it is 100% compatible. Workflows target it with `runs-on: [self-hosted, <label>]`. |
-| `selfaction server` / `selfaction worker` | **CI from webhooks**, without GitHub's runner service. The server takes `push` and `pull_request` webhooks and queues the workflows they trigger; workers run them with the act engine and report back as commit statuses that link to a live log. |
+| `selfaction server` / `selfaction worker` | **CI from webhooks**, without GitHub's runner service. The server takes `push` and `pull_request` webhooks and queues every job of the workflows they trigger; workers on Linux, macOS and Windows run each job with the act engine and report back as commit statuses (or check runs) that link to a live log. Secrets, artifacts and the cache are served by the server. |
 | `selfaction cache` | A shared `actions/cache` server for every repo, with per-repo isolation, LRU/TTL eviction, and `ls` / `prune` / `gc` tools. |
 
-Install it (Go 1.26+):
+Install it on Linux or macOS:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/broisnees/selfaction/main/install.sh | sh
+```
+
+On Windows, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/broisnees/selfaction/main/install.ps1 | iex
+```
+
+Both download the latest [release](https://github.com/broisnees/selfaction/releases) for your system and check it against the release's checksums. With Go 1.26 or newer you can also build it:
 
 ```sh
 go install github.com/broisnees/selfaction@latest
@@ -52,7 +64,7 @@ Each slot does the same cycle:
 
 Host-mode jobs run with a per-slot `HOME`, so their caches and dotfiles stay apart from yours (`--share-home` turns that off). Runners that GitHub reports offline, for example after the machine slept, are restarted. Runners are unregistered when the agent stops.
 
-- **Keep it running:** `selfaction agent install --repo you/app --labels my-mac` (launchd on macOS, `systemd --user` on Linux). Logs go to `~/.selfaction/agent.log`.
+- **Keep it running:** `selfaction agent install --repo you/app --labels my-mac` (launchd on macOS, `systemd --user` on Linux, a scheduled task on Windows). Logs go to `~/.selfaction/agent.log`.
 - **Isolated jobs:** `--mode docker` runs each job in a fresh `ghcr.io/actions/actions-runner` container. Add `--docker-socket` if jobs use `container:`, `services:` or `docker build`.
 - **Organization:** `--org your-org` instead of `--repo`.
 - **GitHub Enterprise Server:** `--github-api https://ghe.example.com/api/v3`.
@@ -68,16 +80,18 @@ selfaction server --external-url https://ci.example.com --workflows .selfaction/
 selfaction worker --server https://ci.example.com --token <worker token> --slots 2
 ```
 
-Add a repository (or organization) webhook for `push` and `pull_request` at `https://ci.example.com/webhooks/github`, content type `application/json`, with the same secret. Every push then shows `selfaction/<workflow> (push)` on the commit, going from Queued to Running to Passed, with a link to the live log.
+Add a repository (or organization) webhook for `push` and `pull_request` at `https://ci.example.com/webhooks/github`, content type `application/json`, with the same secret. Every push then shows one status per job on the commit, such as `selfaction/ci / test (ubuntu-latest) (push)`, going from Queued to Running to Passed, with a link to the live log.
 
-- **Matching GitHub:** the server reads the workflows at the pushed commit and applies GitHub's `branches`, `tags`, `paths` and pull request `types` filters. Each triggered workflow becomes one job, claimed by a worker that serves all of its `runs-on` labels.
-- **Workers:** a worker serves `ubuntu-*` (in Docker), `self-hosted` (on the host), anything mapped with `-P`, and `--labels`. The worker token is generated on the server's first start and kept in `~/.selfaction/server/worker-token`.
-- **Shared cache:** the server serves `actions/cache` under `/cache/` to every worker, with the same retention flags as `cache serve`.
-- **Jobs:** `selfaction server jobs` lists them, `selfaction server cancel <id>` stops one within seconds.
+- **Matching GitHub:** the server reads the workflows at the pushed commit and applies GitHub's `branches`, `tags`, `paths` and pull request `types` filters. Every job of a triggered workflow is queued on its own, once per `strategy.matrix` combination, and released when its `needs` have finished and its `if` holds. `needs.<job>.outputs`, `fail-fast` and `max-parallel` work across workers.
+- **Workers:** a worker serves `ubuntu-*` (in Docker), `self-hosted`, `macos-*` on a Mac and `windows-*` on Windows (on the host), anything mapped with `-P`, and `--labels`. A job goes to a worker that carries all of its `runs-on` labels, so one push can build on Linux, macOS, Windows, Android and iOS machines at once. `selfaction worker install` keeps one running as a service.
+- **Secrets:** `selfaction server secret set you/app NPM_TOKEN` stores a secret encrypted (AES-256-GCM); jobs of that repository get it as `secrets.NPM_TOKEN`. Fork pull requests never do.
+- **Artifacts and cache:** the server is the store for `actions/upload-artifact` / `download-artifact` (v4 and newer) and `actions/cache`, so a job on one worker downloads what a job on another uploaded. The run page lists the artifacts.
+- **GitHub App:** `--app-id` and `--app-key` authenticate as an app, with short-lived installation tokens and check runs instead of commit statuses.
+- **Jobs:** `selfaction server jobs` lists them, `selfaction server cancel <job or run id>` stops them within seconds.
 - **No public address?** `cloudflared tunnel --url http://localhost:8080` gives a temporary one to use as `--external-url`.
-- **Differences from GitHub Actions:** only `push` and `pull_request` start jobs, pull requests run their head commit, and jobs get `GITHUB_TOKEN` (the server's token) but no repository secrets.
+- **Differences from GitHub Actions:** only `push` and `pull_request` start runs, pull requests run their head commit, and organization secrets, environments, `vars` and `concurrency` are not supported.
 
-Pull requests from forks are skipped unless you pass `--allow-forks`, since their code would run on your workers with your token. Keep server-mode workflows in their own directory (`--workflows .selfaction/workflows`) if GitHub Actions also runs the repository, so nothing runs twice.
+Pull requests from forks are skipped unless you pass `--allow-forks`, since their code would run on your workers with your token. Keep server-mode workflows in their own directory (`--workflows .selfaction/workflows`) if GitHub Actions also runs the repository, so nothing runs twice. [`.selfaction/workflows/platforms.yml`](.selfaction/workflows/platforms.yml) builds the samples in `examples/platforms` on all five platforms; see the [platforms guide](https://selfaction.jotko.workers.dev/docs/guides/platforms/).
 
 ## Shared cache server
 
@@ -127,10 +141,16 @@ main.go, cli_*.go      CLI (cobra)
 internal/run           act-based local execution
 internal/cache         cache store (SQLite index + blob files) and HTTP API
 internal/agent         JIT runner pool, runner download/verify, service install
-internal/server        webhooks, trigger filters, SQLite job queue, worker API, job pages, commit statuses
-internal/worker        claims jobs, fetches the commit, runs it with act, streams the log
-internal/github        REST client shared by the agent and the server
+internal/server        webhooks, trigger filters, run planning (needs, matrix, if), SQLite job queue, worker API,
+                       secrets, artifact service, job and run pages, commit statuses and check runs
+internal/worker        claims jobs, fetches the commit, runs the one job with act, streams the log
+internal/github        REST client and GitHub App authentication, shared by the agent and the server
+internal/service       login services: launchd, systemd --user, Windows scheduled tasks
 examples/cache-demo    workflow that exercises actions/cache end to end
+examples/platforms     samples the platforms workflow builds: Go CLI, Android app, iOS package
+images/android         act job image with the Android SDK
+scripts/release.sh     release archives for every platform (run by .github/workflows/release.yml on a tag)
+install.sh, .ps1       installers for Linux/macOS and Windows
 site/                  website: Astro, Starlight and Tailwind, deployed to Cloudflare Workers
 ```
 
@@ -149,11 +169,11 @@ On every push to `main` that touches `site/`, the `site` workflow builds it on a
 
 ## Roadmap
 
-- **Server mode:** GitHub App authentication with check runs instead of commit statuses, and Gitea/Forgejo webhooks.
+- **Server mode:** Gitea/Forgejo webhooks, re-running jobs from the Checks tab, and a fresh Tart VM per macOS job.
 - **AI:**
   - explanations of failed jobs on PRs
   - auto-fix PRs
   - flaky-test detection
   - cache-key advice
   - workflow generation and migration
-- Web UI, Helm chart, Windows host mode, S3 storage for the cache.
+- Web UI, Helm chart, S3 storage for the cache and artifacts.

@@ -99,7 +99,7 @@ Install the agent as a service that starts when you log in:
 selfaction agent install --repo you/app --labels my-mac --slots 2
 ```
 
-On macOS this writes `~/Library/LaunchAgents/dev.selfaction.agent.plist` and logs to `~/.selfaction/agent.log`. On Linux it writes a `systemd --user` unit named `selfaction-agent`; read its output with `journalctl --user -u selfaction-agent`. Remove it with:
+On macOS this writes `~/Library/LaunchAgents/dev.selfaction.agent.plist` and logs to `~/.selfaction/agent.log`. On Linux it writes a `systemd --user` unit named `selfaction-agent`; read its output with `journalctl --user -u selfaction-agent`. On Windows it creates a scheduled task named `selfaction-agent` that starts when you log on, and logs to `~/.selfaction/agent.log`. Remove it with:
 
 ```sh
 selfaction agent uninstall

@@ -1,0 +1,111 @@
+---
+title: Build for every platform
+description: Workers for Linux, macOS, Windows, Android and iOS builds, with one server routing each job to a machine that can run it.
+sidebar:
+  order: 5
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+One push can build for Linux, macOS, Windows, Android and iOS. The [server](/docs/guides/server/) queues each job of a workflow on its own, and a worker that serves the job's `runs-on` labels claims it, so every job lands on a machine that can run it. You trigger and watch everything from anywhere: GitHub sends the webhook, and the run page and commit statuses show the results.
+
+| Platform | `runs-on` | Worker |
+| --- | --- | --- |
+| Linux | `ubuntu-latest` | Any machine with Docker |
+| Linux on ARM | `ubuntu-24.04-arm` | An ARM machine, or any machine with QEMU (below) |
+| macOS | `macos-latest` | A Mac; jobs run on the host |
+| iOS | `[macos-latest, xcode]` | A Mac with Xcode, started with `--labels xcode` |
+| Windows | `windows-latest` | A Windows machine; jobs run on the host |
+| Android | `android` | A worker with the Android SDK image, `-P android=selfaction/android:35` |
+
+Apple's license only allows macOS on Apple hardware, so macOS and iOS jobs always need a Mac worker. Everything else can share machines.
+
+[`.selfaction/workflows/platforms.yml`](https://github.com/broisnees/selfaction/blob/main/.selfaction/workflows/platforms.yml) builds the samples in `examples/platforms` on all five, and is a good starting point.
+
+## Linux
+
+A worker on any system with Docker runs `ubuntu-*` jobs in `catthehacker/ubuntu` containers, the images act recommends. Map labels to other images with `-P`, for example `-P ubuntu-latest=catthehacker/ubuntu:full-latest` for an image closer to GitHub's.
+
+### ARM Linux on an x86 machine
+
+GitHub's ARM runners use the `ubuntu-24.04-arm` and `ubuntu-22.04-arm` labels. A worker on an ARM64 machine with Docker, such as a Raspberry Pi 5 or an Apple silicon Mac, serves them by default, in the same multi-architecture `catthehacker/ubuntu` images.
+
+An x86 machine can run them under QEMU emulation, which is slower but needs no ARM hardware. Register the emulator once, then start a worker that only serves the ARM labels, so it doesn't run x86 jobs under emulation too:
+
+```sh
+docker run --privileged --rm tonistiigi/binfmt --install arm64
+selfaction worker --server https://ci.example.com --name arm-emu --no-default-labels \
+  --container-architecture linux/arm64 \
+  -P ubuntu-24.04-arm=catthehacker/ubuntu:act-24.04 -P ubuntu-22.04-arm=catthehacker/ubuntu:act-22.04
+```
+
+`--container-architecture` applies to every container job of a worker, which is why emulated architectures get a worker of their own.
+
+## macOS
+
+A worker on a Mac serves `macos-latest`, `macos-26`, `macos-15`, `macos-14` and `macos-13`, and runs those jobs directly on the Mac. Each slot gets its own `HOME` in `~/.selfaction/worker/home/<slot>`, so jobs don't see your dotfiles, SSH keys or caches, and tool caches stay with the slot between jobs. Homebrew, Xcode and anything else installed system-wide are shared.
+
+Jobs on the host share the Mac's state: installed tools, `/tmp`, running simulators, and anything a job installs system-wide. Keep `--slots` at 1 for jobs that would disturb each other, or run them in VMs.
+
+### Isolated macOS jobs
+
+For jobs that need a clean machine each time, macOS VMs on Apple silicon are the option. [Tart](https://tart.run) runs them through Apple's Virtualization framework: `tart clone` makes a copy-on-write VM from an image such as `ghcr.io/cirruslabs/macos-sequoia-xcode:latest` in seconds, and the job then runs over SSH inside it. Apple's license allows two macOS VMs at a time per Mac. selfaction does not drive Tart yet; until it does, a worker started inside a long-lived Tart VM gives you the separation from your own account, without a fresh machine per job. Tart is under the Functional Source License, which allows internal use but not offering it as a competing product.
+
+## iOS
+
+iOS builds need Xcode, so they run on a Mac worker. Give that worker a label for it, and ask for both labels in the workflow:
+
+```sh
+selfaction worker --server https://ci.example.com --labels xcode
+```
+
+```yaml
+jobs:
+  ios:
+    runs-on: [macos-latest, xcode]
+    steps:
+      - uses: actions/checkout@v7
+      - run: xcodebuild -scheme App -destination 'generic/platform=iOS Simulator' build
+```
+
+A simulator build needs no signing. For a signed archive or an App Store upload, store the certificate, provisioning profile and App Store Connect key as [secrets](/docs/guides/server/#secrets), import the certificate into a temporary keychain in the job, and run `xcodebuild archive`. A worker's per-slot `HOME` has no login keychain; start it with `--share-home` if your signing setup relies on yours.
+
+## Windows
+
+A worker on Windows serves `windows-latest`, `windows-2025` and `windows-2022`, and runs those jobs on the Windows machine. `run:` steps use PowerShell by default, as on GitHub; `shell: bash` needs Git for Windows' bash on the `PATH`, and `shell: cmd` and `shell: pwsh` work as usual. Linux container jobs on the same worker need Docker Desktop with Linux containers.
+
+Install it with [`install.ps1`](/docs/guides/install/), then keep it running with a scheduled task that starts when you log on:
+
+```powershell
+selfaction worker install --server https://ci.example.com --token <worker token>
+```
+
+<Aside type="caution">
+Windows support has been built and cross-compiled, not yet run on Windows by the maintainers. Expect rough edges, and please report what breaks.
+</Aside>
+
+## Android
+
+Android's build tools only exist for x86-64 Linux, so Android jobs run in a container from an image with the SDK. Build it from `images/android` in this repository:
+
+```sh
+docker build --platform linux/amd64 -t selfaction/android:35 images/android
+selfaction worker --server https://ci.example.com -P android=selfaction/android:35
+```
+
+The image adds a JDK, the Android SDK (platform 35, build tools and platform tools) and Gradle to the usual `catthehacker/ubuntu` image, so `actions/checkout` and other actions keep working. A job then builds with Gradle:
+
+```yaml
+jobs:
+  android:
+    runs-on: android
+    steps:
+      - uses: actions/checkout@v7
+      - run: ./gradlew assembleDebug
+```
+
+On an ARM machine, such as an Apple silicon Mac, run the image under emulation with a worker of its own: `--no-default-labels --container-architecture linux/amd64 -P android=selfaction/android:35`. Emulator tests (`connectedCheck`) need KVM, so they only work on an x86 Linux worker with `/dev/kvm`.
+
+## Release binaries
+
+`selfaction` itself is built for Linux, macOS and Windows on x86-64 and ARM64 for every release, so each kind of worker installs the same way. See [Install](/docs/guides/install/).

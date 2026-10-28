@@ -11,6 +11,7 @@ These flags work with every command:
 | --- | --- | --- |
 | `--home` | `~/.selfaction`, or `$SELFACTION_HOME` | Data directory |
 | `-v`, `--verbose` | off | Debug logging |
+| `--log-file` | | Append logs to this file instead of printing them; services on Windows use it |
 | `--version` | | Print the version |
 
 ## `selfaction run [event]`
@@ -98,7 +99,7 @@ Without `--token` or `--token-file`, the agent uses `$SELFACTION_GITHUB_TOKEN`, 
 
 ### `agent install`
 
-Install `agent start`, with the same flags, as a service: launchd on macOS, `systemd --user` on Linux.
+Install `agent start`, with the same flags, as a login service: a launchd agent on macOS, a `systemd --user` unit on Linux, and a scheduled task that starts at logon on Windows. Logs go to `<home>/agent.log`. Host mode on Windows uses the Windows build of the runner.
 
 ### `agent uninstall`
 
@@ -131,19 +132,33 @@ Take GitHub webhooks and queue the workflows they trigger for workers. See [Run 
 | `--workflows` | `.github/workflows` | Workflow directory in each repository |
 | `--allow-forks` | off | Run pull requests from forks |
 | `--no-cache` | off | Don't serve `actions/cache` to workers |
+| `--no-artifacts` | off | Don't serve `actions/upload-artifact`; each worker keeps its jobs' artifacts |
+| `--artifact-retention` | `2160h` (90 days) | Delete artifacts after this long; a shorter `retention-days` on the upload wins |
+| `--app-id` | | GitHub App id: authenticate as the app and report check runs. Also `$SELFACTION_APP_ID` |
+| `--app-key` | | The GitHub App's private key file (`.pem`). Also `$SELFACTION_APP_KEY` |
 | `--ttl` | `168h` | Cache: evict entries unused for this long; `0` never |
 | `--max-repo-size` | `10GB` | Cache: per-repository cap, least recently used evicted first; `0` none |
 | `--max-total-size` | `0` | Cache: whole-store cap; `0` none |
 
-Without `--github-token` or `--token-file`, the server uses `$SELFACTION_GITHUB_TOKEN`, then `$GITHUB_TOKEN`, then your GitHub CLI login. Its data lives in `<home>/server`.
+With `--app-id` and `--app-key` the server needs no token. Otherwise, without `--github-token` or `--token-file`, it uses `$SELFACTION_GITHUB_TOKEN`, then `$GITHUB_TOKEN`, then your GitHub CLI login. Its data lives in `<home>/server`: the queue (`server.db`), job logs, artifacts, the cache, the worker token and the key that encrypts secrets (`secrets.key`).
 
 ### `server jobs`
 
-List the latest 100 jobs. Takes `--server`, default `http://localhost:8080`, and `--token`, the worker token, which defaults to `$SELFACTION_WORKER_TOKEN`, then `<home>/server/worker-token`.
+List the latest 100 jobs, with the run each belongs to. Takes `--server`, default `http://localhost:8080`, and `--token`, the worker token, which defaults to `$SELFACTION_WORKER_TOKEN`, then `<home>/server/worker-token`.
 
-### `server cancel <job id>...`
+### `server cancel <job or run id>...`
 
-Cancel queued or running jobs. Takes the same flags as `server jobs`.
+Cancel jobs that have not finished, or every unfinished job of a run. Takes the same flags as `server jobs`.
+
+### `server secret`
+
+Manage the repository secrets the server passes to jobs as `secrets.<NAME>`. See [Secrets](/docs/guides/server/#secrets). Each command takes the same flags as `server jobs`.
+
+| Command | Does |
+| --- | --- |
+| `secret set <owner/repo> <NAME>` | Set a secret from `--body` (`-b`) or standard input |
+| `secret ls <owner/repo>` | List the names, without values |
+| `secret rm <owner/repo> <NAME>...` | Delete secrets |
 
 ## `selfaction worker`
 
@@ -153,11 +168,22 @@ Claim jobs from a server and run them with the act engine. See [Run workflows fr
 | --- | --- | --- |
 | `--server` | | Server base URL. Required |
 | `--token` | `$SELFACTION_WORKER_TOKEN`, then `<home>/server/worker-token` | The server's worker token |
+| `--token-file` | | Read the worker token from this file |
 | `--name` | this machine's host name | Worker name; slot n reports as `<name>-<n>` |
 | `-n`, `--slots` | `1` | Concurrent jobs |
 | `-l`, `--labels` | | Extra `runs-on` labels, comma separated |
 | `-P`, `--platform` | | `label=image` for `runs-on`, which also serves the label; image `-self-hosted` runs on this machine. Repeatable |
+| `--no-default-labels` | off | Serve only the labels from `-P` and `--labels`, not the built-in `ubuntu-*`, `self-hosted`, `macos-*` and `windows-*` |
 | `--container-architecture` | | Job container platform, such as `linux/amd64` |
 | `--job-timeout` | `6h` | Cancel a job that runs longer |
+| `--share-home` | off | Run jobs on this machine with your own `HOME` instead of one per slot |
 
-Workspaces, the fallback cache and artifacts live in `<home>/worker`.
+Workspaces, the per-slot homes, the fallback cache and artifacts live in `<home>/worker`.
+
+### `worker install`
+
+Install `worker`, with the same flags, as a login service: launchd on macOS (`dev.selfaction.worker`), `systemd --user` on Linux (`selfaction-worker`), a scheduled task on Windows (`selfaction-worker`). Logs go to `<home>/worker.log`. A token given with `--token` is saved to `<home>/worker/token` with permissions `0600`.
+
+### `worker uninstall`
+
+Stop and remove the worker service. On Windows it lets running jobs finish being cancelled before it ends the task.

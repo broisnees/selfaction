@@ -1,24 +1,56 @@
 ---
 title: Install
-description: Install selfaction with go install, from source, or as a Docker image.
+description: Install selfaction on Linux, macOS or Windows from a release, with go install, from source, or as a Docker image.
 sidebar:
   order: 1
 ---
 
 import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
 
-selfaction is a single Go binary. What else you need depends on how you use it:
+selfaction is a single binary for Linux, macOS and Windows, on x86-64 and ARM64. What else you need depends on how you use it:
 
 | You want to | You need |
 | --- | --- |
-| Build or install selfaction | Go 1.26 or newer |
 | Run workflows locally (`selfaction run`) | Docker |
-| Take jobs from GitHub on this machine (`selfaction agent`, host mode) | macOS or Linux, and a GitHub token |
+| Take jobs from GitHub on this machine (`selfaction agent`, host mode) | A GitHub token |
 | Take jobs in fresh containers (`selfaction agent --mode docker`) | Docker, and a GitHub token |
+| Run jobs from a selfaction server (`selfaction worker`) | Docker for `ubuntu-*` jobs; nothing extra for jobs on the host |
+| Build selfaction yourself | Go 1.26 or newer |
 
 ## Install
 
 <Tabs>
+<TabItem label="Linux and macOS">
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/broisnees/selfaction/main/install.sh | sh
+```
+
+The script downloads the latest release for your system, checks it against the release's SHA-256 checksums and installs it to `/usr/local/bin`, or `~/.local/bin` when that is not writable. Set `SELFACTION_VERSION=v0.3.0` for a specific release, or `SELFACTION_INSTALL_DIR` for another directory. It needs `curl` or `wget`.
+
+</TabItem>
+<TabItem label="Windows">
+
+In PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/broisnees/selfaction/main/install.ps1 | iex
+```
+
+The script installs `selfaction.exe` to `%LOCALAPPDATA%\Programs\selfaction`, checks it against the release's checksums, and adds that directory to your user `PATH`. Open a new terminal afterwards. `$env:SELFACTION_VERSION` and `$env:SELFACTION_INSTALL_DIR` work as on Linux.
+
+</TabItem>
+<TabItem label="Release archive">
+
+Every [release](https://github.com/broisnees/selfaction/releases) has an archive per system: `selfaction_<version>_<os>_<arch>.tar.gz` for Linux and macOS, `.zip` for Windows, with `amd64` and `arm64` builds of each, and a `checksums.txt`. Unpack it and put `selfaction` (or `selfaction.exe`) on your `PATH`:
+
+```sh
+sha256sum --check --ignore-missing checksums.txt
+tar -xzf selfaction_0.3.0_linux_amd64.tar.gz
+sudo mv selfaction_0.3.0_linux_amd64/selfaction /usr/local/bin/
+```
+
+</TabItem>
 <TabItem label="go install">
 
 ```sh
@@ -67,8 +99,10 @@ Everything lives under one directory, `~/.selfaction` by default. Change it with
 | `artifacts/` | Uploads from `actions/upload-artifact` during local runs |
 | `agent/runners/` | The GitHub runner, unpacked once per slot |
 | `agent/downloads/` | The runner release archive, verified against its published checksum |
-| `agent.log` | Agent output when it runs as a service |
+| `server/` | The server's queue, job logs, artifacts, cache, worker token and secrets key |
+| `worker/` | Worker workspaces, per-slot homes and the fallback cache |
+| `agent.log`, `worker.log` | Output of the agent or worker when it runs as a service |
 
 <Aside>
-Nothing outside this directory is changed, except a launchd or systemd entry if you run `selfaction agent install`.
+Nothing outside this directory is changed, except a launchd agent, systemd unit or scheduled task if you run `selfaction agent install` or `selfaction worker install`.
 </Aside>
