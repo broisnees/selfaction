@@ -2,6 +2,7 @@ package agent
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -176,6 +177,31 @@ func TestExtract(t *testing.T) {
 	evil := mk([3]string{"../../escape.sh", "f", "boom"})
 	if err := extract(evil, filepath.Join(t.TempDir(), "slot-2")); err == nil {
 		t.Error("archive entry escaping the destination was accepted")
+	}
+}
+
+func TestExtractZip(t *testing.T) {
+	mk := func(files map[string]string) string {
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		for name, body := range files {
+			w, _ := zw.Create(name)
+			_, _ = w.Write([]byte(body))
+		}
+		zw.Close()
+		p := filepath.Join(t.TempDir(), "r.zip")
+		_ = os.WriteFile(p, buf.Bytes(), 0o644)
+		return p
+	}
+	dest := filepath.Join(t.TempDir(), "slot-1")
+	if err := extractZip(mk(map[string]string{"run.cmd": "@echo off", "bin/Runner.Listener.exe": "MZ"}), dest); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dest, "bin", "Runner.Listener.exe")); err != nil || string(b) != "MZ" {
+		t.Errorf("listener: %q %v", b, err)
+	}
+	if err := extractZip(mk(map[string]string{"../escape.cmd": "boom"}), filepath.Join(t.TempDir(), "slot-2")); err == nil {
+		t.Error("zip entry escaping the destination was accepted")
 	}
 }
 

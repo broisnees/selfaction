@@ -7,6 +7,7 @@ package agent
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -134,7 +135,11 @@ func (a *Agent) runJob(ctx context.Context, n int) error {
 	} else {
 		dir := a.slotDir(n)
 		defer cleanSlot(dir, false)
-		cmd = exec.CommandContext(jobCtx, filepath.Join(dir, "run.sh"))
+		script := "run.sh"
+		if runtime.GOOS == "windows" {
+			script = "run.cmd"
+		}
+		cmd = exec.CommandContext(jobCtx, filepath.Join(dir, script))
 		cmd.Dir = dir
 		env = a.hostEnv(env, dir)
 	}
@@ -147,7 +152,14 @@ func (a *Agent) runJob(ctx context.Context, n int) error {
 	out := &lineLogger{log: a.Log.WithField("runner", name)}
 	cmd.Stdout, cmd.Stderr = out, out
 	// On shutdown let the runner cancel its job and report back before killing it.
-	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+	// Windows can't deliver an interrupt to another process, so the runner is
+	// killed there and GitHub fails its job once the runner stops answering.
+	cmd.Cancel = func() error {
+		if err := cmd.Process.Signal(os.Interrupt); err != nil {
+			return cmd.Process.Kill()
+		}
+		return nil
+	}
 	cmd.WaitDelay = 45 * time.Second
 
 	a.Log.Infof("%s: online, waiting for a job", name)
@@ -239,15 +251,18 @@ func (a *Agent) defaultLabels() []string {
 	return out
 }
 
-// runnerPlatform is the actions/runner release name for this machine, e.g. osx-arm64.
-func runnerPlatform() (string, error) {
-	osName, ok := map[string]string{"darwin": "osx", "linux": "linux"}[runtime.GOOS]
+// runnerPlatform is the actions/runner release name for this machine, e.g.
+// osx-arm64, and the extension of its archive.
+func runnerPlatform() (string, string, error) {
+	osName, ok := map[string]string{"darwin": "osx", "linux": "linux", "windows": "win"}[runtime.GOOS]
 	arch, ok2 := map[string]string{"amd64": "x64", "arm64": "arm64", "arm": "arm"}[runtime.GOARCH]
 	if !ok || !ok2 {
-		// phobos: Windows host mode needs .zip extraction and run.cmd; use --mode docker there until added.
-		return "", fmt.Errorf("host mode is not supported on %s/%s; use --mode docker", runtime.GOOS, runtime.GOARCH)
+		return "", "", fmt.Errorf("host mode is not supported on %s/%s; use --mode docker", runtime.GOOS, runtime.GOARCH)
 	}
-	return osName + "-" + arch, nil
+	if osName == "win" {
+		return osName + "-" + arch, ".zip", nil
+	}
+	return osName + "-" + arch, ".tar.gz", nil
 }
 
 func (a *Agent) slotDir(n int) string {
@@ -258,7 +273,7 @@ func (a *Agent) slotDir(n int) string {
 // per slot (each JIT runner writes its credentials into its own directory), and
 // deletes installs of older versions.
 func (a *Agent) prepareHost(ctx context.Context) error {
-	platform, err := runnerPlatform()
+	platform, ext, err := runnerPlatform()
 	if err != nil {
 		return err
 	}
@@ -269,13 +284,16 @@ func (a *Agent) prepareHost(ctx context.Context) error {
 	a.version = rel.Version
 	// A previous agent that was killed outright (SIGKILL, power loss) can leave
 	// listeners running in the slot directories; they would clash with new registrations.
-	_ = exec.CommandContext(ctx, "pkill", "-f", filepath.Join(a.Dir, "runners")+"/").Run()
-	file := fmt.Sprintf("actions-runner-%s-%s.tar.gz", platform, rel.Version)
-	tarball := filepath.Join(a.Dir, "downloads", file)
-	if _, err := os.Stat(tarball); err != nil {
+	// (Windows has no pkill; there a killed agent's listeners end with its console.)
+	if runtime.GOOS != "windows" {
+		_ = exec.CommandContext(ctx, "pkill", "-f", filepath.Join(a.Dir, "runners")+"/").Run()
+	}
+	file := fmt.Sprintf("actions-runner-%s-%s%s", platform, rel.Version, ext)
+	archive := filepath.Join(a.Dir, "downloads", file)
+	if _, err := os.Stat(archive); err != nil {
 		a.Log.Infof("downloading actions/runner %s (%s)", rel.Version, platform)
 		url := fmt.Sprintf("https://github.com/actions/runner/releases/download/v%s/%s", rel.Version, file)
-		if err := download(ctx, url, tarball, rel.SHA256[platform]); err != nil {
+		if err := download(ctx, url, archive, rel.SHA256[platform]); err != nil {
 			return err
 		}
 	}
@@ -284,7 +302,11 @@ func (a *Agent) prepareHost(ctx context.Context) error {
 		if _, err := os.Stat(dir); err == nil {
 			continue
 		}
-		if err := extract(tarball, dir); err != nil {
+		unpack := extract
+		if ext == ".zip" {
+			unpack = extractZip
+		}
+		if err := unpack(archive, dir); err != nil {
 			return fmt.Errorf("unpack runner for slot %d: %w", n, err)
 		}
 	}
@@ -377,6 +399,53 @@ func extract(tarball, dest string) error {
 				}
 			}
 		}
+		if err != nil {
+			return err
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	return os.Rename(tmp, dest)
+}
+
+// extractZip unpacks a .zip into dest atomically and refuses entries that
+// would land outside it; the Windows runner ships as one.
+func extractZip(archive, dest string) error {
+	zr, err := zip.OpenReader(archive)
+	if err != nil {
+		return err
+	}
+	defer zr.Close()
+	tmp := dest + ".tmp"
+	os.RemoveAll(tmp)
+	for _, f := range zr.File {
+		name := filepath.Clean(filepath.FromSlash(f.Name))
+		if !filepath.IsLocal(name) {
+			return fmt.Errorf("unsafe path in archive: %q", f.Name)
+		}
+		target := filepath.Join(tmp, name)
+		if f.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		in, err := f.Open()
+		if err != nil {
+			return err
+		}
+		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, f.Mode().Perm()|0o600)
+		if err == nil {
+			_, err = io.Copy(out, in)
+			if cerr := out.Close(); err == nil {
+				err = cerr
+			}
+		}
+		in.Close()
 		if err != nil {
 			return err
 		}

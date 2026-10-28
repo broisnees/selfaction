@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 
 	"github.com/broisnees/selfaction/internal/agent"
 	"github.com/broisnees/selfaction/internal/github"
+	"github.com/broisnees/selfaction/internal/service"
 )
 
 func agentCmd() *cobra.Command {
@@ -168,17 +170,7 @@ func agentInstallCmd() *cobra.Command {
 			}
 			// Forward every flag the user set; persist an explicit token to a 0600 file
 			// instead of the service definition.
-			args := []string{"--home=" + homeDir} // the service won't see $SELFACTION_HOME
-			cmd.Flags().Visit(func(f *pflag.Flag) {
-				if f.Name == "token" || f.Name == "token-file" || f.Name == "home" {
-					return
-				}
-				v := f.Value.String()
-				if sv, ok := f.Value.(pflag.SliceValue); ok {
-					v = strings.Join(sv.GetSlice(), ",")
-				}
-				args = append(args, "--"+f.Name+"="+v)
-			})
+			args := append([]string{"agent", "start"}, serviceArgs(cmd, "token", "token-file")...)
 			if !fromGh {
 				tokenFile := a.tokenFile
 				if tokenFile == "" {
@@ -192,13 +184,7 @@ func agentInstallCmd() *cobra.Command {
 				}
 				args = append(args, "--token-file="+tokenFile)
 			}
-			logFile := filepath.Join(homeDir, "agent.log")
-			path, err := agent.Install(args, logFile)
-			if err != nil {
-				return err
-			}
-			fmt.Printf("installed %s\nlogs: %s\n", path, logFile)
-			return nil
+			return installService("agent", args)
 		},
 	}
 	a.bind(cmd.Flags())
@@ -209,8 +195,48 @@ func agentUninstallCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "uninstall",
 		Short: "Stop and remove the agent service",
-		RunE:  func(*cobra.Command, []string) error { return agent.Uninstall() },
+		RunE:  func(*cobra.Command, []string) error { return uninstallService("agent") },
 	}
+}
+
+// serviceArgs forwards every flag the user set on cmd, except skip, so the
+// service runs with the same settings. The service won't see $SELFACTION_HOME,
+// so the data directory is always passed.
+func serviceArgs(cmd *cobra.Command, skip ...string) []string {
+	args := []string{"--home=" + homeDir}
+	cmd.Flags().Visit(func(f *pflag.Flag) {
+		if f.Name == "home" || slices.Contains(skip, f.Name) {
+			return
+		}
+		if sv, ok := f.Value.(pflag.SliceValue); ok {
+			for _, v := range sv.GetSlice() { // repeat the flag: -P values may contain commas
+				args = append(args, "--"+f.Name+"="+v)
+			}
+			return
+		}
+		args = append(args, "--"+f.Name+"="+f.Value.String())
+	})
+	return args
+}
+
+// installService installs `selfaction <args>` as the login service name.
+func installService(name string, args []string) error {
+	logPath := filepath.Join(homeDir, name+".log")
+	s := service.Service{Name: name, Args: args, LogFile: logPath}
+	if runtime.GOOS == "windows" {
+		s.StopFile = filepath.Join(homeDir, name+".stop")
+		s.Args = append(s.Args, "--log-file="+logPath, "--stop-file="+s.StopFile)
+	}
+	path, err := s.Install()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("installed %s\nlogs: %s\n", path, logPath)
+	return nil
+}
+
+func uninstallService(name string) error {
+	return service.Service{Name: name, StopFile: filepath.Join(homeDir, name+".stop")}.Uninstall()
 }
 
 func agentCleanCmd() *cobra.Command {

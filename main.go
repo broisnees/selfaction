@@ -30,8 +30,10 @@ func init() {
 }
 
 var (
-	homeDir string
-	verbose bool
+	homeDir  string
+	verbose  bool
+	logFile  string // services on Windows have no stdout to redirect
+	stopFile string // a file whose appearance stops the command, as Ctrl-C would
 )
 
 func main() {
@@ -41,15 +43,27 @@ func main() {
 		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		PersistentPreRun: func(*cobra.Command, []string) {
+		PersistentPreRunE: func(*cobra.Command, []string) error {
 			log.SetFormatter(&log.TextFormatter{FullTimestamp: true, TimestampFormat: time.TimeOnly})
 			if verbose {
 				log.SetLevel(log.DebugLevel)
 			}
+			if logFile != "" {
+				f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+				if err != nil {
+					return err
+				}
+				log.SetOutput(f)
+				log.SetFormatter(&log.TextFormatter{FullTimestamp: true, TimestampFormat: time.DateTime, DisableColors: true})
+			}
+			return nil
 		},
 	}
 	root.PersistentFlags().StringVar(&homeDir, "home", defaultHome(), "data directory (env SELFACTION_HOME)")
 	root.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "debug logging")
+	root.PersistentFlags().StringVar(&logFile, "log-file", "", "append logs to this file")
+	root.PersistentFlags().StringVar(&stopFile, "stop-file", "", "stop gracefully, as on Ctrl-C, when this file appears")
+	_ = root.PersistentFlags().MarkHidden("stop-file")
 	root.AddCommand(runCmd(), cacheCmd(), agentCmd(), serverCmd(), workerCmd())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
@@ -68,9 +82,31 @@ func defaultHome() string {
 	return filepath.Join(home, ".selfaction")
 }
 
-// signalContext ends on Ctrl-C or SIGTERM (what launchd, systemd and docker stop send).
+// signalContext ends on Ctrl-C or SIGTERM (what launchd, systemd and docker
+// stop send), or when --stop-file appears (how a Windows service is stopped).
 func signalContext() (context.Context, context.CancelFunc) {
-	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	if stopFile != "" {
+		os.Remove(stopFile) // left over from an earlier stop
+		go func() {
+			t := time.NewTicker(2 * time.Second)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					if _, err := os.Stat(stopFile); err == nil {
+						log.Info("stop file found; stopping")
+						os.Remove(stopFile)
+						cancel()
+						return
+					}
+				}
+			}
+		}()
+	}
+	return ctx, cancel
 }
 
 // policyFlags binds the cache retention limits shared by `cache serve` and `cache gc`.
