@@ -1,0 +1,74 @@
+# Builds the samples in examples/platforms on five platforms in one run, each
+# on a selfaction worker that serves its runs-on labels (server mode):
+#
+#   Linux    ubuntu-latest          any worker with Docker
+#   macOS    macos-latest           a Mac worker; runs on the host
+#   Windows  windows-latest         a Windows worker; runs on the host
+#   Android  android                a worker started with -P android=selfaction/android:35 (see images/android)
+#   iOS      [macos-latest, xcode]  a Mac with Xcode, started with --labels xcode
+#
+# A job waits in the queue until a worker that serves its labels claims it, so
+# with no Windows worker online the windows-latest job stays queued.
+name: platforms
+on:
+  push:
+    paths: ['examples/platforms/**', 'images/android/**', '.selfaction/workflows/platforms.yml']
+  pull_request:
+    paths: ['examples/platforms/**', 'images/android/**', '.selfaction/workflows/platforms.yml']
+jobs:
+  cli:
+    name: cli ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build
+        shell: bash
+        run: go build -o "dist/hello$(go env GOEXE)" ./examples/platforms/cli
+      - name: Run
+        shell: bash
+        run: ./dist/hello*
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hello-${{ matrix.os }}
+          path: dist/
+
+  android:
+    runs-on: android
+    steps:
+      - uses: actions/checkout@v7
+      - run: gradle --no-daemon -p examples/platforms/android assembleDebug
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hello-android
+          path: examples/platforms/android/app/build/outputs/apk/debug/*.apk
+
+  ios:
+    runs-on: [macos-latest, xcode]
+    defaults:
+      run:
+        working-directory: examples/platforms/ios
+    steps:
+      - uses: actions/checkout@v7
+      - run: xcodebuild -version
+      - name: Build for the iOS simulator (unsigned)
+        run: xcodebuild -scheme Hello -destination 'generic/platform=iOS Simulator' -derivedDataPath build build
+
+  summary:
+    needs: [cli, android, ios]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+      - run: |
+          echo "cli: ${{ needs.cli.result }}, android: ${{ needs.android.result }}, ios: ${{ needs.ios.result }}"
+          find artifacts -type f | sort
