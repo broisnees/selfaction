@@ -64,17 +64,41 @@ func testServer(t *testing.T) (*server.Store, *httptest.Server) {
 	return store, api
 }
 
+// enqueue stores a push run of .github/workflows/ci.yml with one queued job.
+func enqueue(t *testing.T, store *server.Store, cloneURL, sha, key string, labels ...string) *server.Job {
+	t.Helper()
+	j := &server.Job{Key: key, Name: key, Labels: labels, Status: server.Queued}
+	r := &server.Run{Repo: "o/app", SHA: sha, Ref: "refs/heads/main", Event: "push", Workflow: ".github/workflows/ci.yml", Name: "ci",
+		Payload: []byte(`{"after":"` + sha + `"}`), Source: []byte("jobs: {}"), CloneURL: cloneURL}
+	if err := store.CreateRun(t.Context(), r, []*server.Job{j}); err != nil {
+		t.Fatal(err)
+	}
+	return j
+}
+
+func TestHostJobsGetASlotHome(t *testing.T) {
+	w := &Worker{Dir: t.TempDir(), Platforms: []string{"gpu=-self-hosted"}, Log: logrus.New()}
+	if h := w.hostHome("box-1", []string{"ubuntu-latest"}); h != "" {
+		t.Errorf("a container job got HOME %s", h)
+	}
+	if h := w.hostHome("box-1", []string{"self-hosted", "linux"}); h != filepath.Join(w.Dir, "home", "box-1") {
+		t.Errorf("self-hosted job HOME = %q", h)
+	}
+	if h := w.hostHome("box-2", []string{"GPU"}); h != filepath.Join(w.Dir, "home", "box-2") {
+		t.Errorf("-P label=-self-hosted job HOME = %q", h)
+	}
+	w.ShareHome = true
+	if h := w.hostHome("box-1", []string{"self-hosted"}); h != "" {
+		t.Errorf("--share-home job HOME = %q", h)
+	}
+}
+
 func TestWorkerRunsClaimedJobs(t *testing.T) {
 	cloneURL, sha := gitRepo(t)
 	store, api := testServer(t)
 
 	enqueue := func(name string) *server.Job {
-		j := &server.Job{Repo: "o/app", SHA: sha, Ref: "refs/heads/main", Event: "push", Workflow: ".github/workflows/" + name + ".yml",
-			Name: name, Labels: []string{"ubuntu-latest"}, Payload: []byte(`{"after":"` + sha + `"}`), CloneURL: cloneURL}
-		if err := store.Enqueue(t.Context(), j); err != nil {
-			t.Fatal(err)
-		}
-		return j
+		return enqueue(t, store, cloneURL, sha, name, "ubuntu-latest")
 	}
 	ok, broken, slow := enqueue("ok"), enqueue("broken"), enqueue("slow")
 
@@ -84,17 +108,19 @@ func TestWorkerRunsClaimedJobs(t *testing.T) {
 		Server: api.URL, Token: "wt", Name: "box", Labels: []string{"ubuntu-latest", "self-hosted"}, Slots: 3,
 		Dir: t.TempDir(), Log: logger,
 		Execute: func(ctx context.Context, o run.Options) error {
-			switch filepath.Base(o.Workflows) {
-			case "ok.yml":
+			switch o.Job {
+			case "ok":
 				branch, _ := exec.Command("git", "-C", o.Dir, "rev-parse", "--abbrev-ref", "HEAD").Output()
 				event, _ := os.ReadFile(o.EventPath)
 				if _, err := os.Stat(filepath.Join(o.Dir, "hello.txt")); err != nil || strings.TrimSpace(string(branch)) != "main" ||
-					string(event) != `{"after":"`+sha+`"}` || !slices.Contains(o.Secrets, "GITHUB_TOKEN=gh-token") {
-					return fmt.Errorf("bad checkout or options: branch %q event %q secrets %v", branch, event, o.Secrets)
+					string(event) != `{"after":"`+sha+`"}` || !slices.Contains(o.Secrets, "GITHUB_TOKEN=gh-token") || !o.Only ||
+					o.Workflows != ".github/workflows/ci.yml" || !slices.ContainsFunc(o.Env, func(e string) bool { return strings.HasPrefix(e, "GITHUB_RUN_ID=") }) {
+					return fmt.Errorf("bad checkout or options: branch %q event %q options %+v", branch, event, o)
 				}
 				fmt.Fprintln(o.Log, "[ok/test]   | step output")
+				o.Outputs["answer"] = "42"
 				return nil
-			case "broken.yml":
+			case "broken":
 				return errors.New("Job 'test' failed")
 			default:
 				close(started)
@@ -118,6 +144,9 @@ func TestWorkerRunsClaimedJobs(t *testing.T) {
 	}
 	if status(ok) != server.Success || status(broken) != server.Failure || status(slow) != server.Cancelled {
 		t.Fatalf("statuses: ok=%s broken=%s slow=%s", status(ok), status(broken), status(slow))
+	}
+	if got, _ := store.Get(t.Context(), ok.ID); got.Outputs["answer"] != "42" {
+		t.Errorf("outputs = %v, want the job's outputs reported", got.Outputs)
 	}
 
 	logOf := func(j *server.Job) string { b, _ := store.Log(j.ID); return string(b) }
@@ -164,11 +193,7 @@ func TestWorkerRunsClaimedJobs(t *testing.T) {
 func TestStoppingTheWorkerCancelsItsJobs(t *testing.T) {
 	cloneURL, sha := gitRepo(t)
 	store, api := testServer(t)
-	j := &server.Job{Repo: "o/app", SHA: sha, Ref: "refs/heads/main", Event: "push", Workflow: ".github/workflows/ci.yml",
-		Name: "ci", Labels: []string{"ubuntu-latest"}, Payload: []byte(`{}`), CloneURL: cloneURL}
-	if err := store.Enqueue(t.Context(), j); err != nil {
-		t.Fatal(err)
-	}
+	j := enqueue(t, store, cloneURL, sha, "ci", "ubuntu-latest")
 	started := make(chan struct{})
 	w := &Worker{Server: api.URL, Token: "wt", Name: "box", Labels: []string{"ubuntu-latest"}, Dir: t.TempDir(), Log: logrus.New(),
 		Execute: func(ctx context.Context, o run.Options) error {

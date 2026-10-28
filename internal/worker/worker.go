@@ -11,10 +11,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +38,7 @@ type Worker struct {
 	Platforms []string      // runs-on label=image overrides, as for selfaction run
 	Arch      string        // container platform
 	Timeout   time.Duration // per job; 0 = 6h, GitHub's limit
+	ShareHome bool          // run host jobs with this user's HOME instead of one per slot
 	Log       logrus.FieldLogger
 	HTTP      *http.Client
 
@@ -116,7 +119,7 @@ func (w *Worker) work(ctx context.Context, name string, c *server.Claim) {
 	}
 	jctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	w.Log.Infof("%s: running %s for %s %s@%.7s (job %s)", name, j.Name, j.Event, j.Repo, j.SHA, j.ID)
+	w.Log.Infof("%s: running %s / %s for %s %s@%.7s (job %s)", name, j.WorkflowName, j.Name, j.Event, j.Repo, j.SHA, j.ID)
 
 	out := &stream{}
 	cancelled := make(chan struct{})
@@ -127,7 +130,8 @@ func (w *Worker) work(ctx context.Context, name string, c *server.Claim) {
 	}()
 
 	result := server.Success
-	if err := w.execute(jctx, c, out); err != nil {
+	outputs := map[string]string{}
+	if err := w.execute(jctx, name, c, out, outputs); err != nil {
 		fmt.Fprintf(out, "\n%s\n", err)
 		result = server.Failure
 	}
@@ -155,7 +159,7 @@ func (w *Worker) work(ctx context.Context, name string, c *server.Claim) {
 		// ctx is done when the worker is stopping; the result must still reach the server.
 		fctx, stop := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer stop()
-		body, _ := json.Marshal(map[string]string{"worker": name, "result": result})
+		body, _ := json.Marshal(map[string]any{"worker": name, "result": result, "outputs": outputs})
 		if res, err := w.post(fctx, "/api/v1/jobs/"+j.ID+"/finish", "application/json", body); err != nil {
 			w.Log.Errorf("%s: report result of job %s: %v", name, j.ID, err)
 		} else {
@@ -165,34 +169,93 @@ func (w *Worker) work(ctx context.Context, name string, c *server.Claim) {
 	w.Log.Infof("%s: job %s %s", name, j.ID, result)
 }
 
-// execute clones the commit and runs the workflow in a scratch directory.
-func (w *Worker) execute(ctx context.Context, c *server.Claim, out io.Writer) error {
+// execute clones the commit and runs the claimed job in a scratch directory.
+func (w *Worker) execute(ctx context.Context, slot string, c *server.Claim, out io.Writer, outputs map[string]string) error {
 	j := c.Job
 	dir := filepath.Join(w.Dir, "jobs", j.ID)
 	defer os.RemoveAll(dir)
 	defer os.Remove(dir + ".event.json")
 	fmt.Fprintf(out, "Fetching %s at %.7s\n", j.Repo, j.SHA)
-	if err := fetch(ctx, dir, j.CloneURL, j.SHA, j.Ref, c.Token, out); err != nil {
+	if err := fetch(ctx, dir, c.CloneURL, j.SHA, j.Ref, c.Token, out); err != nil {
 		return fmt.Errorf("fetch %s: %w", j.Repo, err)
 	}
 	event := dir + ".event.json"
 	if err := os.WriteFile(event, c.Event, 0o600); err != nil {
 		return err
 	}
+	secrets := []string{"GITHUB_TOKEN=" + c.Token}
+	for _, k := range slices.Sorted(maps.Keys(c.Secrets)) {
+		secrets = append(secrets, k+"="+c.Secrets[k])
+	}
+	var env []string
+	for _, k := range slices.Sorted(maps.Keys(c.Env)) {
+		env = append(env, k+"="+c.Env[k])
+	}
+	if home := w.hostHome(slot, j.Labels); home != "" {
+		env = append(env, "HOME="+home)
+		if real, err := os.UserHomeDir(); err == nil && os.Getenv("DOCKER_CONFIG") == "" {
+			env = append(env, "DOCKER_CONFIG="+filepath.Join(real, ".docker"))
+		}
+	}
+	needs := make(map[string]run.Need, len(c.Needs))
+	for k, n := range c.Needs {
+		needs[k] = run.Need{Result: n.Result, Outputs: n.Outputs}
+	}
+	artifacts := "" // the server's artifact service, which every worker shares
+	if c.Env["ACTIONS_RUNTIME_URL"] == "" {
+		artifacts = filepath.Join(w.Dir, "artifacts", j.ID)
+	}
 	return w.Execute(ctx, run.Options{
 		Dir:         dir,
 		Workflows:   j.Workflow,
 		Event:       j.Event,
 		EventPath:   event,
-		Secrets:     []string{"GITHUB_TOKEN=" + c.Token},
+		Job:         j.Key,
+		Only:        true,
+		Combination: j.Matrix,
+		Needs:       needs,
+		Outputs:     outputs,
+		Secrets:     secrets,
+		Env:         env,
 		Platforms:   w.Platforms,
 		Arch:        w.Arch,
 		CacheURL:    c.CacheURL,
 		CacheDir:    filepath.Join(w.Dir, "cache"),
 		CachePolicy: cache.Policy{TTL: 7 * 24 * time.Hour, MaxScopeBytes: 10 << 30},
-		ArtifactDir: filepath.Join(w.Dir, "artifacts", j.ID),
+		ArtifactDir: artifacts,
 		Log:         out,
 	})
+}
+
+// hostHome is the HOME for a job that runs directly on this machine: one per
+// slot, so jobs don't share your caches, dotfiles and credentials, as with
+// the agent. Jobs in containers keep the container's HOME ("").
+func (w *Worker) hostHome(slot string, labels []string) string {
+	if w.ShareHome {
+		return ""
+	}
+	platforms := run.DefaultPlatforms()
+	for _, p := range w.Platforms {
+		if k, v, ok := strings.Cut(p, "="); ok {
+			platforms[strings.ToLower(k)] = v
+		}
+	}
+	for _, l := range labels {
+		img := platforms[strings.ToLower(l)]
+		if img == "" {
+			continue
+		}
+		if img != "-self-hosted" {
+			return ""
+		}
+		home := filepath.Join(w.Dir, "home", slot)
+		if err := os.MkdirAll(home, 0o700); err != nil {
+			w.Log.Warnf("%s: home %s: %v; the job uses your HOME", slot, home, err)
+			return ""
+		}
+		return home
+	}
+	return ""
 }
 
 // fetch makes dir a shallow clone of exactly sha. The token travels in the

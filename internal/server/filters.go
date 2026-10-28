@@ -108,22 +108,6 @@ func strs(v any) []string {
 	return nil
 }
 
-// requiredLabels is the union of the workflow's literal runs-on labels. Labels
-// computed by expressions cannot be known before the run and are left out.
-func requiredLabels(wf *model.Workflow) []string {
-	var out []string
-	for _, job := range wf.Jobs {
-		for _, l := range job.RunsOn() {
-			l = strings.ToLower(strings.TrimSpace(l))
-			if l != "" && !strings.Contains(l, "${{") && !slices.Contains(out, l) {
-				out = append(out, l)
-			}
-		}
-	}
-	slices.Sort(out)
-	return out
-}
-
 // workflowName is the workflow's name, or its file name without extension.
 func workflowName(wf *model.Workflow, file string) string {
 	if wf.Name != "" {

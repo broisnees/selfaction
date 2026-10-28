@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -26,6 +27,7 @@ import (
 	"github.com/nektos/act/pkg/model"
 	"github.com/nektos/act/pkg/runner"
 	log "github.com/sirupsen/logrus"
+	"gopkg.in/yaml.v3"
 
 	"github.com/broisnees/selfaction/internal/cache"
 )
@@ -51,11 +53,27 @@ type Options struct {
 	ArtifactDir string
 	CachePolicy cache.Policy
 	Log         io.Writer // job output goes here as plain lines instead of to the terminal; must be safe for concurrent writes
+
+	// Only runs just Job, for one matrix Combination, without running the jobs
+	// it needs: their results and outputs come from Needs. Afterwards Outputs
+	// (if not nil) holds the job's outputs. Server-mode workers use this to run
+	// one job of a workflow whose other jobs run elsewhere.
+	Only        bool
+	Combination map[string]any
+	Needs       map[string]Need
+	Outputs     map[string]string
+}
+
+// Need is the result ("success", "failure", "cancelled" or "skipped") and
+// outputs of a job that another job needs.
+type Need struct {
+	Result  string            `json:"result"`
+	Outputs map[string]string `json:"outputs"`
 }
 
 // DefaultPlatforms are the "medium" catthehacker images act recommends: small
 // enough to pull quickly, complete enough for most marketplace actions.
-// macOS labels run directly on a Mac host.
+// macOS labels run directly on a Mac host, and Windows labels on a Windows host.
 func DefaultPlatforms() map[string]string {
 	p := map[string]string{
 		"ubuntu-latest": "catthehacker/ubuntu:act-latest",
@@ -64,8 +82,17 @@ func DefaultPlatforms() map[string]string {
 		"ubuntu-20.04":  "catthehacker/ubuntu:act-20.04",
 		"self-hosted":   "-self-hosted",
 	}
-	if runtime.GOOS == "darwin" {
-		for _, l := range []string{"macos-latest", "macos-15", "macos-14", "macos-13"} {
+	if runtime.GOARCH == "arm64" { // GitHub's ARM runner labels, served natively on ARM machines
+		p["ubuntu-24.04-arm"] = "catthehacker/ubuntu:act-24.04"
+		p["ubuntu-22.04-arm"] = "catthehacker/ubuntu:act-22.04"
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		for _, l := range []string{"macos-latest", "macos-26", "macos-15", "macos-14", "macos-13"} {
+			p[l] = "-self-hosted"
+		}
+	case "windows":
+		for _, l := range []string{"windows-latest", "windows-2025", "windows-2022"} {
 			p[l] = "-self-hosted"
 		}
 	}
@@ -106,6 +133,12 @@ func Run(ctx context.Context, o Options) error {
 	}
 	if o.List {
 		return printPlan(plan)
+	}
+	var only *model.Job
+	if o.Only {
+		if plan, only, err = onlyJob(plan, o); err != nil {
+			return err
+		}
 	}
 
 	socket := ""
@@ -187,7 +220,59 @@ func Run(ctx context.Context, o Options) error {
 	if o.Log != nil {
 		ctx = runner.WithJobLoggerFactory(ctx, plainLogs{o.Log})
 	}
-	return r.NewPlanExecutor(plan)(ctx)
+	err = r.NewPlanExecutor(plan)(ctx)
+	if only != nil && o.Outputs != nil {
+		for k, v := range only.Outputs {
+			if strings.Contains(v, "${{") {
+				v = "" // never evaluated: the job stopped before its outputs were set
+			}
+			o.Outputs[k] = v
+		}
+	}
+	return err
+}
+
+// onlyJob narrows a plan to o.Job alone: the jobs it needs get the results
+// and outputs in o.Needs instead of running, and its matrix shrinks to
+// o.Combination.
+func onlyJob(plan *model.Plan, o Options) (*model.Plan, *model.Job, error) {
+	var run *model.Run
+	for _, st := range plan.Stages {
+		for _, r := range st.Runs {
+			if r.JobID == o.Job {
+				run = r
+			}
+		}
+	}
+	if run == nil {
+		return nil, nil, fmt.Errorf("no job %q in %s", o.Job, o.Workflows)
+	}
+	for id, n := range o.Needs {
+		if j := run.Workflow.GetJob(id); j != nil {
+			j.Result, j.Outputs = n.Result, maps.Clone(n.Outputs)
+			if j.Outputs == nil {
+				j.Outputs = map[string]string{}
+			}
+		}
+	}
+	job := run.Job()
+	if job.Strategy == nil && len(o.Combination) > 0 {
+		job.Strategy = &model.Strategy{}
+	}
+	if job.Strategy != nil {
+		var m yaml.Node
+		if len(o.Combination) > 0 {
+			one := map[string][]any{}
+			for k, v := range o.Combination {
+				one[k] = []any{v}
+			}
+			if err := m.Encode(one); err != nil {
+				return nil, nil, fmt.Errorf("matrix: %w", err)
+			}
+		}
+		job.Strategy.RawMatrix = m
+	}
+	return &model.Plan{Stages: []*model.Stage{{Runs: []*model.Run{run}}}}, job, nil
 }
 
 // startCache serves a local store on an ephemeral port for the length of the run.

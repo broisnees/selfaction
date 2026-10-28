@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"sort"
 	"strings"
 	"time"
 
@@ -78,10 +79,13 @@ func validSignature(secret string, body []byte, header string) bool {
 
 // payload holds the fields of push and pull_request deliveries the server uses.
 type payload struct {
-	Ref        string `json:"ref"`
-	After      string `json:"after"`
-	Deleted    bool   `json:"deleted"`
-	Action     string `json:"action"`
+	Ref          string `json:"ref"`
+	After        string `json:"after"`
+	Deleted      bool   `json:"deleted"`
+	Action       string `json:"action"`
+	Installation struct {
+		ID int64 `json:"id"`
+	} `json:"installation"`
 	Repository struct {
 		FullName string `json:"full_name"`
 		CloneURL string `json:"clone_url"`
@@ -107,14 +111,18 @@ type payload struct {
 	} `json:"pull_request"`
 }
 
-// plan turns one event into queued jobs, one per workflow it triggers.
+// plan turns one event into runs, one per workflow it triggers.
 func (s *Server) plan(ctx context.Context, event string, body []byte) error {
 	var p payload
 	if err := json.Unmarshal(body, &p); err != nil {
 		return err
 	}
 	repo := p.Repository.FullName
-	job := Job{Repo: repo, Event: event, Payload: body, CloneURL: p.Repository.CloneURL}
+	run := Run{Repo: repo, Event: event, Payload: body, CloneURL: p.Repository.CloneURL, Installation: p.Installation.ID}
+	gh, err := s.client(ctx, run.Installation)
+	if err != nil {
+		return fmt.Errorf("%s: %w", repo, err)
+	}
 	t := trigger{event: event}
 
 	switch event {
@@ -122,7 +130,7 @@ func (s *Server) plan(ctx context.Context, event string, body []byte) error {
 		if p.Deleted || strings.Trim(p.After, "0") == "" {
 			return nil
 		}
-		job.SHA, job.Ref, t.ref = p.After, p.Ref, p.Ref
+		run.SHA, run.Ref, t.ref = p.After, p.Ref, p.Ref
 		// GitHub lists at most 2048 commits; beyond that the changes are unknown.
 		if n := len(p.Commits); n > 0 && n < 2048 {
 			t.files = []string{}
@@ -135,23 +143,30 @@ func (s *Server) plan(ctx context.Context, event string, body []byte) error {
 		if pr == nil {
 			return nil
 		}
-		if pr.Head.Repo.FullName != repo && !s.AllowForks {
+		run.Fork = !strings.EqualFold(pr.Head.Repo.FullName, repo)
+		if run.Fork && !s.AllowForks {
 			s.Log.Infof("%s#%d: skipping a pull request from fork %s", repo, pr.Number, pr.Head.Repo.FullName)
 			return nil
 		}
-		job.SHA, job.Ref, job.CloneURL = pr.Head.SHA, "refs/heads/"+pr.Head.Ref, pr.Head.Repo.CloneURL
+		run.SHA, run.Ref, run.CloneURL = pr.Head.SHA, "refs/heads/"+pr.Head.Ref, pr.Head.Repo.CloneURL
 		t.action, t.ref = p.Action, "refs/heads/"+pr.Base.Ref
-		t.files = s.pullFiles(ctx, repo, pr.Number)
+		t.files = s.pullFiles(ctx, gh, repo, pr.Number)
 	}
 
-	files, err := s.workflowFiles(ctx, repo, job.SHA)
+	files, err := s.workflowFiles(ctx, gh, repo, run.SHA)
 	if err != nil {
 		return err
 	}
-	for name, src := range files {
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		src := files[name]
 		wf, err := model.ReadWorkflow(bytes.NewReader(src), false)
 		if err != nil {
-			s.Log.Warnf("%s@%.7s: %s: %v", repo, job.SHA, name, err)
+			s.Log.Warnf("%s@%.7s: %s: %v", repo, run.SHA, name, err)
 			continue
 		}
 		ok, err := t.matches(wf)
@@ -161,26 +176,28 @@ func (s *Server) plan(ctx context.Context, event string, body []byte) error {
 		if !ok {
 			continue
 		}
-		j := job
-		j.Workflow, j.Name, j.Labels = name, workflowName(wf, name), requiredLabels(wf)
-		if err := s.Store.Enqueue(ctx, &j); err != nil {
+		if err := validateNeeds(wf); err != nil {
+			s.Log.Warnf("%s@%.7s: %s: %v", repo, run.SHA, name, err)
+			continue
+		}
+		r := run
+		r.Workflow, r.Name, r.Source = name, workflowName(wf, name), src
+		if err := s.startRun(ctx, &r); err != nil {
 			return err
 		}
-		s.Log.Infof("queued %s for %s %s@%.7s (job %s)", j.Name, event, repo, j.SHA, j.ID)
-		s.report(&j)
+		s.Log.Infof("run %s: %s for %s %s@%.7s", r.ID, r.Name, event, repo, r.SHA)
 	}
-	s.wake.broadcast()
 	return nil
 }
 
 // workflowFiles returns the workflow files at sha, by path.
-func (s *Server) workflowFiles(ctx context.Context, repo, sha string) (map[string][]byte, error) {
+func (s *Server) workflowFiles(ctx context.Context, gh *github.Client, repo, sha string) (map[string][]byte, error) {
 	var entries []struct {
 		Path string `json:"path"`
 		Type string `json:"type"`
 	}
 	dir := fmt.Sprintf("/repos/%s/contents/%s?ref=%s", repo, escapePath(s.Workflows), url.QueryEscape(sha))
-	if err := s.GitHub.Do(ctx, "GET", dir, nil, &entries); err != nil {
+	if err := gh.Do(ctx, "GET", dir, nil, &entries); err != nil {
 		if github.IsNotFound(err) {
 			return nil, nil
 		}
@@ -191,7 +208,7 @@ func (s *Server) workflowFiles(ctx context.Context, repo, sha string) (map[strin
 		if e.Type != "file" || (path.Ext(e.Path) != ".yml" && path.Ext(e.Path) != ".yaml") {
 			continue
 		}
-		src, err := s.GitHub.Raw(ctx, fmt.Sprintf("/repos/%s/contents/%s?ref=%s", repo, escapePath(e.Path), url.QueryEscape(sha)),
+		src, err := gh.Raw(ctx, fmt.Sprintf("/repos/%s/contents/%s?ref=%s", repo, escapePath(e.Path), url.QueryEscape(sha)),
 			"application/vnd.github.raw+json", 1<<20)
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", e.Path, err)
@@ -203,13 +220,13 @@ func (s *Server) workflowFiles(ctx context.Context, repo, sha string) (map[strin
 
 // pullFiles lists a pull request's changed paths, or nil if they cannot be
 // listed in full (path filters are then skipped rather than guessed).
-func (s *Server) pullFiles(ctx context.Context, repo string, number int) []string {
+func (s *Server) pullFiles(ctx context.Context, gh *github.Client, repo string, number int) []string {
 	files := []string{}
 	for page := 1; page <= 30; page++ { // GitHub lists at most 3000 files
 		var batch []struct {
 			Filename string `json:"filename"`
 		}
-		if err := s.GitHub.Do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d/files?per_page=100&page=%d", repo, number, page), nil, &batch); err != nil {
+		if err := gh.Do(ctx, "GET", fmt.Sprintf("/repos/%s/pulls/%d/files?per_page=100&page=%d", repo, number, page), nil, &batch); err != nil {
 			s.Log.Warnf("%s#%d: list changed files: %v", repo, number, err)
 			return nil
 		}

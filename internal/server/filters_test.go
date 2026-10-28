@@ -1,7 +1,6 @@
 package server
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
@@ -68,11 +67,8 @@ func TestTriggerMatchesGitHubRules(t *testing.T) {
 	}
 }
 
-func TestRequiredLabelsAndName(t *testing.T) {
+func TestWorkflowName(t *testing.T) {
 	wf := workflow(t, " push")
-	if got := fmt.Sprint(requiredLabels(wf)); got != "[gpu self-hosted ubuntu-latest]" {
-		t.Errorf("labels = %s (expressions must be skipped, case folded)", got)
-	}
 	if workflowName(wf, ".github/workflows/x.yml") != "w" {
 		t.Error("name from workflow")
 	}

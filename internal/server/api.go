@@ -1,20 +1,29 @@
 package server
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
-	"html/template"
+	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
+
+	"github.com/nektos/act/pkg/model"
 )
 
 // Claim is what a worker receives with a job.
 type Claim struct {
-	Job      *Job            `json:"job"`
-	Event    json.RawMessage `json:"event"`     // the webhook payload, for github.event
-	Token    string          `json:"token"`     // GitHub token for cloning and as the job's GITHUB_TOKEN
-	CacheURL string          `json:"cache_url"` // actions/cache server, if the server offers one
+	Job      *Job              `json:"job"`
+	Event    json.RawMessage   `json:"event"`     // the webhook payload, for github.event
+	CloneURL string            `json:"clone_url"` // where to fetch the commit
+	Token    string            `json:"token"`     // GitHub token for cloning and as the job's GITHUB_TOKEN
+	CacheURL string            `json:"cache_url"` // actions/cache server, if the server offers one
+	Needs    map[string]Need   `json:"needs"`     // results and outputs of the jobs this one needs, directly or not
+	Secrets  map[string]string `json:"secrets,omitempty"`
+	Env      map[string]string `json:"env,omitempty"` // run ids and the artifact service
 }
 
 func (s *Server) claim(w http.ResponseWriter, r *http.Request) {
@@ -40,9 +49,20 @@ func (s *Server) claim(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if j != nil {
-			s.Log.Infof("job %s (%s %s) claimed by %s", j.ID, j.Repo, j.Name, j.Worker)
+			c, err := s.claimFor(r.Context(), j)
+			if err != nil {
+				// The job can't run anywhere if the server can't describe it; don't hand it out again.
+				s.Log.Errorf("job %s: %v", j.ID, err)
+				_ = s.Store.AppendLog(j.ID, []byte("The server could not start this job: "+err.Error()+"\n"))
+				if j, err := s.Store.End(context.WithoutCancel(r.Context()), j.ID, Errored); err == nil {
+					s.report(j)
+					go s.advance(context.Background(), j.RunID)
+				}
+				continue
+			}
+			s.Log.Infof("job %s (%s %s / %s) claimed by %s", j.ID, j.Repo, j.WorkflowName, j.Name, j.Worker)
 			s.report(j)
-			writeJSON(w, Claim{Job: j, Event: j.Payload, Token: s.GitHub.Token, CacheURL: s.CacheURL})
+			writeJSON(w, c)
 			return
 		}
 		select {
@@ -54,6 +74,51 @@ func (s *Server) claim(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// claimFor gathers what a worker needs to run j.
+func (s *Server) claimFor(ctx context.Context, j *Job) (*Claim, error) {
+	run, err := s.Store.GetRun(ctx, j.RunID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.Store.Jobs(ctx, run.ID)
+	if err != nil {
+		return nil, err
+	}
+	wf, err := model.ReadWorkflow(bytes.NewReader(run.Source), false)
+	if err != nil {
+		return nil, err
+	}
+	gh, err := s.client(ctx, run.Installation)
+	if err != nil {
+		return nil, err
+	}
+	c := &Claim{
+		Job:      j,
+		Event:    run.Payload,
+		CloneURL: run.CloneURL,
+		Token:    gh.Token,
+		CacheURL: s.CacheURL,
+		Needs:    needsFor(wf, j.Key, rows),
+		Env: map[string]string{
+			"GITHUB_RUN_ID":      strconv.FormatInt(run.Number, 10),
+			"GITHUB_RUN_NUMBER":  strconv.FormatInt(run.RunNumber, 10),
+			"GITHUB_RUN_ATTEMPT": "1",
+		},
+	}
+	if s.Sealer != nil && !run.Fork {
+		if c.Secrets, err = s.repoSecrets(ctx, run.Repo); err != nil {
+			return nil, fmt.Errorf("read secrets: %w", err)
+		}
+	}
+	if s.Artifacts != "" {
+		// @actions/artifact only uses the origin of this URL.
+		c.Env["ACTIONS_RUNTIME_URL"] = s.base() + "/"
+		c.Env["ACTIONS_RESULTS_URL"] = s.base() + "/"
+		c.Env["ACTIONS_RUNTIME_TOKEN"] = s.runtimeToken(run.ID, j.ID)
+	}
+	return c, nil
 }
 
 // appendLog stores a chunk of output and doubles as the heartbeat. It answers
@@ -89,20 +154,22 @@ func (s *Server) appendLog(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) finish(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Worker string `json:"worker"`
-		Result string `json:"result"`
+		Worker  string            `json:"worker"`
+		Result  string            `json:"result"`
+		Outputs map[string]string `json:"outputs"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	j, err := s.Store.Finish(r.Context(), r.PathValue("id"), req.Worker, req.Result)
+	j, err := s.Store.Finish(r.Context(), r.PathValue("id"), req.Worker, req.Result, req.Outputs)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	s.Log.Infof("job %s (%s %s): %s", j.ID, j.Repo, j.Name, j.Status)
+	s.Log.Infof("job %s (%s %s / %s): %s", j.ID, j.Repo, j.WorkflowName, j.Name, j.Status)
 	s.report(j)
+	s.advance(context.WithoutCancel(r.Context()), j.RunID) // the run must move on even if the worker hangs up
 	writeJSON(w, j)
 }
 
@@ -118,8 +185,39 @@ func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
 	}
 	if j.Status == Cancelled {
 		s.report(j)
+		s.advance(context.WithoutCancel(r.Context()), j.RunID)
 	}
 	writeJSON(w, j)
+}
+
+// cancelRun cancels every job of a run that has not finished.
+func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request) {
+	run, err := s.Store.GetRun(r.Context(), r.PathValue("id"))
+	if errors.Is(err, ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	jobs, err := s.Store.Jobs(r.Context(), run.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	for i, j := range jobs {
+		if j.Done() {
+			continue
+		}
+		if jobs[i], err = s.Store.Cancel(r.Context(), j.ID); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.report(jobs[i])
+	}
+	s.advance(context.WithoutCancel(r.Context()), run.ID)
+	writeJSON(w, jobs)
 }
 
 func (s *Server) list(w http.ResponseWriter, r *http.Request) {
@@ -129,58 +227,6 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, jobs)
-}
-
-func (s *Server) rawLog(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.Store.Get(r.Context(), r.PathValue("id")); err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	b, _ := s.Store.Log(r.PathValue("id"))
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Write(b)
-}
-
-var jobPage = template.Must(template.New("job").Funcs(template.FuncMap{
-	"took": func(j *Job) string {
-		switch {
-		case j.StartedAt.IsZero():
-			return ""
-		case j.FinishedAt.IsZero():
-			return roundDuration(time.Since(j.StartedAt)) + " so far"
-		default:
-			return roundDuration(j.FinishedAt.Sub(j.StartedAt))
-		}
-	},
-}).Parse(`<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-{{if not .Job.Done}}<meta http-equiv="refresh" content="3">{{end}}
-<title>{{.Job.Name}} {{.Job.Status}} · {{.Job.Repo}}</title>
-<style>
-:root{color-scheme:light dark;--ink:#0e1a33;--soft:#3b4a63;--rule:#cbd3dd;--bg:#fff;--log:#eef1f4}
-@media (prefers-color-scheme:dark){:root{--ink:#e6ebf2;--soft:#9fb0c8;--rule:#26344f;--bg:#0d1628;--log:#131f36}}
-body{margin:0;padding:24px 16px;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,sans-serif}
-main{max-width:72rem;margin:0 auto}h1{margin:0;font-size:1.6rem}p{margin:.25rem 0;color:var(--soft)}a{color:inherit}
-.s{font-weight:600}.success{color:#1a7f4b}.failure,.error{color:#c23b2e}.cancelled{color:var(--soft)}.queued,.running{color:#b45309}
-pre{margin-top:1.25rem;padding:1rem;background:var(--log);border:1px solid var(--rule);border-radius:8px;overflow-x:auto;font:13px/1.55 ui-monospace,monospace;white-space:pre-wrap;word-break:break-word}
-</style></head><body><main>
-<h1>{{.Job.Name}} <span class="s {{.Job.Status}}">{{.Job.Status}}</span></h1>
-<p>{{.Job.Repo}}, {{.Job.Event}} on {{.Job.Ref}}, commit <a href="https://github.com/{{.Job.Repo}}/commit/{{.Job.SHA}}">{{printf "%.7s" .Job.SHA}}</a>, workflow {{.Job.Workflow}}</p>
-<p>{{if .Job.Worker}}Worker {{.Job.Worker}}. {{end}}{{took .Job}}</p>
-<pre>{{if .Log}}{{.Log}}{{else}}Waiting for a worker…{{end}}</pre>
-</main></body></html>`))
-
-// page shows a job and its log. Job ids are random, so the page is safe to
-// link from public commit statuses.
-func (s *Server) page(w http.ResponseWriter, r *http.Request) {
-	j, err := s.Store.Get(r.Context(), r.PathValue("id"))
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	b, _ := s.Store.Log(j.ID)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = jobPage.Execute(w, map[string]any{"Job": j, "Log": string(b)})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
